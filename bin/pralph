@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# pralph – CLI wrapper that auto-bootstraps a venv
+set -euo pipefail
+
+# Resolve the real directory of this script (follows symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+PROJ_DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+VENV="$PROJ_DIR/.venv"
+
+# Bootstrap venv if missing
+if [[ ! -d "$VENV" ]]; then
+    echo "pralph: creating venv at $VENV ..." >&2
+    # Prefer python3.13/3.12 for >=3.10 requirement
+    PYTHON=""
+    for p in python3.13 python3.12 python3.11 python3; do
+        if command -v "$p" &>/dev/null; then
+            PYTHON="$p"
+            break
+        fi
+    done
+    "$PYTHON" -m venv "$VENV"
+    "$VENV/bin/pip" install --quiet -e "$PROJ_DIR"
+fi
+
+exec "$VENV/bin/python" -m pralph "$@"

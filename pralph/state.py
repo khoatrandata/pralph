@@ -1,0 +1,315 @@
+from __future__ import annotations
+
+import json
+import os
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+
+from pralph.models import IterationResult, PhaseState, Story, StoryStatus
+
+
+class StateManager:
+    def __init__(self, project_dir: str) -> None:
+        self.project_dir = Path(project_dir)
+        self.state_dir = self.project_dir / ".pralph"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+
+    # -- file paths --
+
+    @property
+    def design_doc_path(self) -> Path:
+        return self.state_dir / "design-doc.md"
+
+    @property
+    def guardrails_path(self) -> Path:
+        return self.state_dir / "guardrails.md"
+
+    @property
+    def stories_path(self) -> Path:
+        return self.state_dir / "stories.jsonl"
+
+    @property
+    def status_path(self) -> Path:
+        return self.state_dir / "status.jsonl"
+
+    @property
+    def run_log_path(self) -> Path:
+        return self.state_dir / "run-log.jsonl"
+
+    @property
+    def phase_state_path(self) -> Path:
+        return self.state_dir / "phase-state.json"
+
+    @property
+    def phase1_analysis_path(self) -> Path:
+        return self.state_dir / "phase1-analysis.json"
+
+    @property
+    def research_notes_path(self) -> Path:
+        return self.state_dir / "research-notes.md"
+
+    @property
+    def ideas_path(self) -> Path:
+        return self.state_dir / "ideas.md"
+
+    def phase_prompt_path(self, phase: str) -> Path:
+        return self.state_dir / f"{phase}-prompt.md"
+
+    @property
+    def home_dir(self) -> Path:
+        return Path.home() / ".pralph"
+
+    def read_phase_prompt(self, phase: str) -> str:
+        # Project-level overrides home-level
+        path = self.phase_prompt_path(phase)
+        if path.exists():
+            return path.read_text().strip()
+        home_path = self.home_dir / f"{phase}-prompt.md"
+        if home_path.exists():
+            return home_path.read_text().strip()
+        return ""
+
+    def resolve_prompt_template(self, name: str, default: str) -> str:
+        """Resolve a prompt template: project prompts/ > home prompts/ > built-in default."""
+        project_path = self.state_dir / "prompts" / f"{name}.md"
+        if project_path.exists():
+            return project_path.read_text()
+        home_path = self.home_dir / "prompts" / f"{name}.md"
+        if home_path.exists():
+            return home_path.read_text()
+        return default
+
+    @property
+    def extra_tools_path(self) -> Path:
+        return self.state_dir / "extra-tools.txt"
+
+    def read_extra_tools(self) -> str:
+        """Read project-level extra tools (one per line or comma-separated)."""
+        if not self.extra_tools_path.exists():
+            return ""
+        raw = self.extra_tools_path.read_text().strip()
+        # Normalize: support one-per-line or comma-separated
+        tools = [t.strip() for t in raw.replace("\n", ",").split(",") if t.strip()]
+        return ",".join(tools)
+
+    # -- review feedback --
+
+    @property
+    def review_feedback_dir(self) -> Path:
+        return self.state_dir / "review-feedback"
+
+    def review_feedback_path(self, story_id: str) -> Path:
+        return self.review_feedback_dir / f"{story_id}.md"
+
+    def write_review_feedback(self, story_id: str, feedback: str) -> None:
+        self.review_feedback_dir.mkdir(parents=True, exist_ok=True)
+        self.review_feedback_path(story_id).write_text(feedback)
+
+    def read_review_feedback(self, story_id: str) -> str:
+        path = self.review_feedback_path(story_id)
+        if path.exists():
+            return path.read_text().strip()
+        return ""
+
+    def clear_review_feedback(self, story_id: str) -> None:
+        self.review_feedback_path(story_id).unlink(missing_ok=True)
+
+    # -- design doc --
+
+    def read_design_doc(self) -> str:
+        if self.design_doc_path.exists():
+            return self.design_doc_path.read_text()
+        return ""
+
+    def write_design_doc(self, content: str) -> None:
+        self.design_doc_path.write_text(content)
+
+    def has_design_doc(self) -> bool:
+        return self.design_doc_path.exists() and self.design_doc_path.stat().st_size > 0
+
+    # -- guardrails --
+
+    def read_guardrails(self) -> str:
+        if self.guardrails_path.exists():
+            return self.guardrails_path.read_text()
+        return ""
+
+    # -- stories --
+
+    def load_stories(self) -> list[Story]:
+        stories: list[Story] = []
+        if not self.stories_path.exists():
+            return stories
+        for line in self.stories_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                stories.append(Story.from_dict(json.loads(line)))
+            except (json.JSONDecodeError, KeyError):
+                continue
+        return stories
+
+    def append_stories(self, stories: list[Story]) -> None:
+        with open(self.stories_path, "a") as f:
+            for s in stories:
+                f.write(json.dumps(s.to_dict()) + "\n")
+
+    def get_pending_stories(self) -> list[Story]:
+        return [s for s in self.load_stories() if s.status == StoryStatus.pending]
+
+    def get_actionable_stories(self) -> list[Story]:
+        """Return stories that are pending or need rework (rework first)."""
+        stories = self.load_stories()
+        rework = [s for s in stories if s.status == StoryStatus.rework]
+        pending = [s for s in stories if s.status == StoryStatus.pending]
+        return rework + pending
+
+    def recover_orphaned_stories(self) -> list[Story]:
+        """Find in_progress stories (orphans from crashes) and reset to pending."""
+        stories = self.load_stories()
+        recovered: list[Story] = []
+
+        for s in stories:
+            if s.status == StoryStatus.in_progress:
+                s.status = StoryStatus.pending
+                s.metadata["previous_attempt"] = {
+                    "was_in_progress": True,
+                    "recovered_at": datetime.now().isoformat(),
+                }
+                recovered.append(s)
+
+        if recovered:
+            self._rewrite_stories(stories)
+            with open(self.status_path, "a") as f:
+                for s in recovered:
+                    entry = {
+                        "story_id": s.id,
+                        "status": "pending",
+                        "summary": "Recovered from crash (was in_progress)",
+                        "recovery": True,
+                    }
+                    f.write(json.dumps(entry) + "\n")
+
+        return recovered
+
+    def get_story_ids(self) -> set[str]:
+        return {s.id for s in self.load_stories()}
+
+    def get_category_stats(self) -> dict[str, dict[str, int]]:
+        stats: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "next_id": 1})
+        for story in self.load_stories():
+            cat = story.category.upper()
+            if not cat:
+                continue
+            stats[cat]["count"] += 1
+            # Parse numeric suffix from id like "AUTH-043"
+            parts = story.id.rsplit("-", 1)
+            if len(parts) == 2:
+                try:
+                    num = int(parts[1])
+                    stats[cat]["next_id"] = max(stats[cat]["next_id"], num + 1)
+                except ValueError:
+                    pass
+        return dict(stats)
+
+    def format_existing_stories_context(self) -> str:
+        stories = self.load_stories()
+        if not stories:
+            return "(none yet)"
+        lines: list[str] = []
+        for s in stories:
+            deps = ", ".join(s.dependencies) if s.dependencies else "none"
+            lines.append(f"- {s.id}: {s.title} [priority={s.priority}, status={s.status.value}, deps={deps}]")
+        return "\n".join(lines)
+
+    def format_category_stats(self) -> str:
+        stats = self.get_category_stats()
+        if not stats:
+            return "(no categories yet — start IDs at CATEGORY-001)"
+        lines: list[str] = []
+        for cat, info in sorted(stats.items()):
+            lines.append(f"- {cat}: count={info['count']}, next_id={info['next_id']:03d}")
+        return "\n".join(lines)
+
+    # -- story status --
+
+    def mark_story_status(
+        self,
+        story_id: str,
+        status: StoryStatus,
+        summary: str = "",
+        extra: dict | None = None,
+    ) -> None:
+        entry = {
+            "story_id": story_id,
+            "status": status.value,
+            "summary": summary,
+            **(extra or {}),
+        }
+        with open(self.status_path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+        # Also rewrite stories.jsonl with updated status
+        stories = self.load_stories()
+        for s in stories:
+            if s.id == story_id:
+                s.status = status
+                break
+        self._rewrite_stories(stories)
+
+    def _rewrite_stories(self, stories: list[Story]) -> None:
+        with open(self.stories_path, "w") as f:
+            for s in stories:
+                f.write(json.dumps(s.to_dict()) + "\n")
+
+    def get_implemented_summary(self, max_chars: int = 8000) -> str:
+        if not self.status_path.exists():
+            return ""
+        lines: list[str] = ["## Previously Implemented Stories\n"]
+        total_len = len(lines[0])
+        truncated = 0
+        for raw in self.status_path.read_text().splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                entry = json.loads(raw)
+                sid = entry.get("story_id", "?")
+                st = entry.get("status", "?")
+                sm = entry.get("summary", "")
+                line = f"- {sid}: {st} — {sm}"
+                if total_len + len(line) + 1 > max_chars:
+                    truncated += 1
+                    continue
+                lines.append(line)
+                total_len += len(line) + 1
+            except json.JSONDecodeError:
+                continue
+        if len(lines) == 1:
+            return ""
+        if truncated:
+            lines.append(f"\n(... and {truncated} more — see {self.status_path} for full list)")
+        return "\n".join(lines)
+
+    # -- phase state --
+
+    def load_phase_state(self, phase: str) -> PhaseState:
+        if self.phase_state_path.exists():
+            try:
+                data = json.loads(self.phase_state_path.read_text())
+                if data.get("phase") == phase:
+                    return PhaseState.from_dict(data)
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return PhaseState(phase=phase)
+
+    def save_phase_state(self, state: PhaseState) -> None:
+        self.phase_state_path.write_text(json.dumps(state.to_dict(), indent=2) + "\n")
+
+    # -- run log --
+
+    def log_iteration(self, result: IterationResult) -> None:
+        with open(self.run_log_path, "a") as f:
+            f.write(json.dumps(result.to_dict()) + "\n")
