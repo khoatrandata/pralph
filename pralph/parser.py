@@ -170,6 +170,30 @@ def parse_implement_output(text: str) -> dict[str, Any]:
     return {"status": "error", "reason": "Could not parse implementation output"}
 
 
+def parse_compound_output(text: str) -> dict[str, Any]:
+    """Parse compound capture output — extract captured, reason, solutions.
+
+    Returns dict with:
+      - captured (bool)
+      - reason (str)
+      - solutions (list of dicts)
+    """
+    data = extract_json_from_text(text)
+    if isinstance(data, dict) and "captured" in data:
+        return {
+            "captured": bool(data["captured"]),
+            "reason": data.get("reason", ""),
+            "solutions": data.get("solutions", []),
+        }
+
+    # Could not parse — default to no capture
+    return {
+        "captured": False,
+        "reason": "Could not parse compound output",
+        "solutions": [],
+    }
+
+
 def parse_review_output(text: str) -> dict[str, Any]:
     """Parse review output — extract approved, feedback, issues.
 

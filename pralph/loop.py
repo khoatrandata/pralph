@@ -11,6 +11,7 @@ import click
 
 from pralph.assembler import (
     assemble_add_prompt,
+    assemble_compound_prompt,
     assemble_ideate_prompt,
     assemble_implement_prompt,
     assemble_phase1_analyze_prompt,
@@ -25,6 +26,7 @@ from pralph.parser import (
     detect_completion_signal,
     detect_ideation_complete,
     extract_json_from_text,
+    parse_compound_output,
     parse_implement_output,
     parse_plan_output,
     parse_review_output,
@@ -32,6 +34,7 @@ from pralph.parser import (
 )
 from pralph.runner import (
     ADD_TOOLS,
+    COMPOUND_TOOLS,
     IDEATE_TOOLS,
     IMPLEMENT_TOOLS,
     PLAN_TOOLS,
@@ -621,6 +624,7 @@ def run_implement_loop(
     story_id: str | None = None,
     phase1: bool = True,
     review: bool = True,
+    compound: bool = False,
     user_prompt: str = "",
     extra_tools: str = "",
     verbose: bool = False,
@@ -650,7 +654,8 @@ def run_implement_loop(
     if story_id:
         return _implement_single(state, story_id, model=model, system_prompt=system_prompt,
                                  tools=tools, user_prompt=user_prompt, review=review,
-                                 verbose=verbose, dangerously_skip_permissions=dangerously_skip_permissions,
+                                 compound=compound, verbose=verbose,
+                                 dangerously_skip_permissions=dangerously_skip_permissions,
                                  max_budget_usd=max_budget_usd)
 
     # State-based mode selection (evaluated each iteration)
@@ -815,6 +820,18 @@ def run_implement_loop(
                     state.mark_story_status(story.id, StoryStatus.rework, summary="Review rejected")
                     story_queue.clear()  # Force refresh to pick up rework story
 
+        # Compound learning: capture solutions after successful implementation
+        if new_status == StoryStatus.implemented and compound:
+            compound_cost = _run_compound_capture(
+                state, story,
+                model=model,
+                system_prompt=system_prompt,
+                verbose=verbose,
+                dangerously_skip_permissions=dangerously_skip_permissions,
+                max_budget_usd=max_budget_usd,
+            )
+            total_cost += compound_cost
+
         # Clean up analysis file when all its stories are done
         if new_status == StoryStatus.implemented and state.phase1_analysis_path.exists():
             data = json.loads(state.phase1_analysis_path.read_text())
@@ -923,6 +940,7 @@ def _implement_single(
     tools: str = IMPLEMENT_TOOLS,
     user_prompt: str = "",
     review: bool = True,
+    compound: bool = False,
     verbose: bool,
     dangerously_skip_permissions: bool,
     max_budget_usd: float | None,
@@ -991,7 +1009,145 @@ def _implement_single(
             state.mark_story_status(story.id, StoryStatus.rework, summary="Review rejected")
             return PhaseState(phase="implement", completed=True, completion_reason="review_rejected")
 
+    # Compound learning: capture solutions after successful implementation
+    if new_status == StoryStatus.implemented and compound:
+        _run_compound_capture(
+            state, story,
+            model=model,
+            system_prompt=system_prompt,
+            verbose=verbose,
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            max_budget_usd=max_budget_usd,
+        )
+
     return PhaseState(phase="implement", completed=True, completion_reason="single_story_done")
+
+
+def _slugify(text: str) -> str:
+    """Generate a filename-safe slug from text."""
+    import re as _re
+    slug = text.lower().strip()
+    slug = _re.sub(r"[^\w\s-]", "", slug)
+    slug = _re.sub(r"[\s_]+", "-", slug)
+    slug = _re.sub(r"-+", "-", slug)
+    return slug[:80].strip("-")
+
+
+def _run_compound_capture(
+    state: StateManager,
+    story: Story,
+    *,
+    model: str,
+    system_prompt: str,
+    verbose: bool,
+    dangerously_skip_permissions: bool,
+    max_budget_usd: float | None,
+) -> float:
+    """Run compound learning capture after a successful implementation. Returns cost."""
+    click.echo(click.style(f"  Capturing learnings: {story.id}", fg='magenta', bold=True))
+
+    prompt = assemble_compound_prompt(state, story)
+    result = run_with_retry(
+        prompt,
+        model=model,
+        allowed_tools=COMPOUND_TOOLS,
+        system_prompt=system_prompt,
+        dangerously_skip_permissions=dangerously_skip_permissions,
+        max_budget_usd=max_budget_usd,
+        timeout=300,
+        verbose=verbose,
+        project_dir=str(state.project_dir),
+    )
+
+    if not result.success:
+        click.echo(click.style(f"  Compound capture failed: {result.error[:120]}", fg='yellow'))
+        return result.cost_usd
+
+    parsed = parse_compound_output(result.result)
+
+    if not parsed["captured"]:
+        click.echo(click.style(f"  Nothing notable: {parsed['reason'][:120]}", fg='yellow'))
+        return result.cost_usd
+
+    solutions = parsed.get("solutions", [])
+    for sol in solutions:
+        title = sol.get("title", "Untitled")
+        category = sol.get("category", "logic-errors")
+        tags = sol.get("tags", [])
+        error_sig = sol.get("error_signature", "")
+        content = sol.get("content", "")
+
+        if not content:
+            # Build content from fields if not provided as full doc
+            parts = [f"# {title}\n"]
+            if sol.get("problem"):
+                parts.append(f"## Problem\n\n{sol['problem']}\n")
+            if error_sig:
+                parts.append(f"## Error Signature\n\n`{error_sig}`\n")
+            if sol.get("solution"):
+                parts.append(f"## Solution\n\n{sol['solution']}\n")
+            if sol.get("prevention"):
+                parts.append(f"## Prevention\n\n{sol['prevention']}\n")
+            if sol.get("related_files"):
+                files = "\n".join(f"- {f}" for f in sol["related_files"])
+                parts.append(f"## Related Files\n\n{files}\n")
+            content = "\n".join(parts)
+
+        filename_slug = _slugify(title) + ".md"
+        index_entry = {
+            "filename": f"{category}/{filename_slug}",
+            "category": category,
+            "title": title,
+            "tags": tags,
+            "story_id": story.id,
+            "created": datetime.now().isoformat(),
+            "error_signature": error_sig,
+        }
+
+        path = state.save_solution(category, filename_slug, content, index_entry)
+        click.echo(click.style(f"  + {title}", fg='green') + f" → {path}")
+
+    click.echo(click.style(f"  Captured {len(solutions)} solution(s)", fg='green', bold=True))
+    return result.cost_usd
+
+
+def run_compound(
+    state: StateManager,
+    *,
+    story_id: str | None = None,
+    description: str = "",
+    model: str = "sonnet",
+    verbose: bool = False,
+    dangerously_skip_permissions: bool = False,
+    max_budget_usd: float | None = None,
+) -> float:
+    """Standalone compound capture. Returns cost."""
+    from pralph.assembler import build_guardrails_system_prompt
+
+    system_prompt = build_guardrails_system_prompt("implement", state)
+
+    if story_id:
+        stories = state.load_stories()
+        story = next((s for s in stories if s.id == story_id), None)
+        if not story:
+            click.echo(f"Error: Story '{story_id}' not found")
+            return 0.0
+    else:
+        # Create a synthetic story for ad-hoc capture
+        story = Story(
+            id="COMPOUND",
+            title=description or "Ad-hoc compound capture",
+            content=description,
+        )
+
+    return _run_compound_capture(
+        state, story,
+        model=model,
+        system_prompt=system_prompt,
+        verbose=verbose,
+        dangerously_skip_permissions=dangerously_skip_permissions,
+        max_budget_usd=max_budget_usd,
+    )
 
 
 def _sort_stories(stories: list[Story]) -> list[Story]:

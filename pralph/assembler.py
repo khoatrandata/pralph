@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from pralph.models import PhaseState, Story
+from pralph.prompts.compound import COMPOUND_CAPTURE_PROMPT, COMPOUND_RECALL_SECTION
 from pralph.prompts.guardrails import CODE_GUARDRAILS, DEFAULT_GUARDRAILS, STORY_GUARDRAILS
 from pralph.prompts.implement import (
     IMPLEMENTATION_IMPLEMENT_PROMPT,
@@ -89,6 +90,14 @@ def assemble_plan_prompt(
     project_prompt = state.read_phase_prompt("plan")
     combined_prompt = "\n\n".join(p for p in [project_prompt, user_prompt] if p) or "Create a comprehensive design document."
 
+    # Build solutions recall section for plan awareness
+    solutions_recall = ""
+    if state.has_solutions():
+        solutions_ctx = _build_solutions_context(state)
+        if solutions_ctx:
+            recall = _safe_sub(COMPOUND_RECALL_SECTION, "solutions_context", _escape_template_vars(solutions_ctx))
+            solutions_recall = "\n" + recall
+
     if iteration == 1 and not state.has_design_doc():
         template = state.resolve_prompt_template("plan-initial", INITIAL_PLAN_PROMPT)
         return template.format(
@@ -96,7 +105,7 @@ def assemble_plan_prompt(
             design_doc_file=design_doc_file,
             guardrails_file=guardrails_file,
             research_notes_file=research_notes_file,
-        ) + resume
+        ) + solutions_recall + resume
 
     template = state.resolve_prompt_template("plan-iteration", ITERATION_PROMPT_TEMPLATE)
     return template.format(
@@ -105,7 +114,7 @@ def assemble_plan_prompt(
         user_prompt=combined_prompt,
         design_doc_file=design_doc_file,
         research_notes_file=research_notes_file,
-    ) + resume
+    ) + solutions_recall + resume
 
 
 # -- Stories prompts --
@@ -308,7 +317,15 @@ def assemble_implement_prompt(
     # Rework context: include reviewer feedback when retrying a rejected story
     rework_context = _build_rework_context(state, story)
 
-    return prompt + crash_context + rework_context + resume
+    # Compound learning: inject relevant past solutions
+    solutions_recall = ""
+    if state.has_solutions():
+        solutions_ctx = _build_solutions_context(state, story)
+        if solutions_ctx:
+            recall = _safe_sub(COMPOUND_RECALL_SECTION, "solutions_context", _escape_template_vars(solutions_ctx))
+            solutions_recall = "\n" + recall
+
+    return prompt + crash_context + rework_context + solutions_recall + resume
 
 
 def _build_rework_context(state: StateManager, story: Story) -> str:
@@ -417,6 +434,63 @@ def assemble_phase1_implement_prompt(
     prompt = _safe_sub(prompt, "phase1_stories_json", _escape_template_vars(json.dumps(phase1_stories, indent=2)))
     prompt = _safe_sub(prompt, "implementation_order", _escape_template_vars(json.dumps(implementation_order)))
     prompt = _safe_sub(prompt, "architecture_context", _escape_template_vars(architecture_context))
+    return prompt
+
+
+# -- Compound learning prompts --
+
+
+def _build_solutions_context(state: StateManager, story: "Story | None" = None) -> str:
+    """Build solutions context for injection into other prompts.
+
+    With story: searches index using story title/category, includes up to 3 full docs.
+    Without story (plan phase): includes summary of all solutions.
+    """
+    if not state.has_solutions():
+        return ""
+
+    if story is not None:
+        # Search mode: find relevant solutions for this story
+        query_parts = [story.title]
+        if story.category:
+            query_parts.append(story.category)
+        query = " ".join(query_parts)
+        matches = state.search_solutions(query, max_results=3)
+
+        if not matches:
+            return ""
+
+        parts: list[str] = []
+        for match in matches:
+            filename = match.get("filename", "")
+            title = match.get("title", "?")
+            content = state.read_solution(filename)
+            if content:
+                # Truncate individual solutions
+                if len(content) > 2000:
+                    content = content[:2000] + "\n\n(... truncated)"
+                parts.append(f"### {title}\n\n{content}")
+            else:
+                tags = ", ".join(match.get("tags", []))
+                parts.append(f"### {title}\n\nTags: {tags}")
+
+        return "\n\n---\n\n".join(parts)
+    else:
+        # Summary mode: compact overview of all solutions
+        return state.get_solutions_summary()
+
+
+def assemble_compound_prompt(
+    state: StateManager,
+    story: "Story",
+) -> str:
+    """Build the prompt for compound learning capture after implementation."""
+    impl_summary = state.get_implemented_summary(max_chars=2000)
+
+    prompt = state.resolve_prompt_template("compound", COMPOUND_CAPTURE_PROMPT)
+    prompt = _safe_sub(prompt, "story_id", _escape_template_vars(story.id))
+    prompt = _safe_sub(prompt, "story_title", _escape_template_vars(story.title))
+    prompt = _safe_sub(prompt, "implementation_summary", _escape_template_vars(impl_summary))
     return prompt
 
 

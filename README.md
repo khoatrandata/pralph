@@ -14,7 +14,7 @@ pralph is inspired by the official [Ralph](https://github.com/anthropics/ralph) 
 
 ## How it works
 
-pralph breaks development into four phases:
+pralph breaks development into phases:
 
 ### Phase 1: Plan
 
@@ -35,6 +35,15 @@ Manage stories on the fly:
 ### Phase 3: Implement
 
 Autonomously implements stories one at a time from the backlog. Optionally runs a review loop after each implementation. Includes crash recovery — orphaned in-progress stories reset to pending on restart.
+
+### Compound Learning
+
+Inspired by the [compound-engineering-plugin](https://github.com/EveryInc/compound-engineering-plugin), compound learning captures non-trivial solutions as structured documentation after each implementation. Each documented solution compounds your team's knowledge — the first time you solve a problem takes research; document it, and the next occurrence takes minutes.
+
+- **`--compound`** flag on `implement` — auto-captures learnings after each successful story
+- **`compound`** standalone command — ad-hoc capture from recent work
+
+Solutions are stored in `.pralph/solutions/` and automatically recalled during future plan and implement phases via keyword search.
 
 ## Installation
 
@@ -76,7 +85,14 @@ pralph refine -s AUTH-001 "split into login and registration"
 # 6. Implement the backlog
 pralph implement --review
 
-# 7. Browse and edit stories in the web viewer
+# 6b. Implement with compound learning (captures solutions after each story)
+pralph implement --review --compound
+
+# 7. Ad-hoc capture of learnings
+pralph compound -d "Fixed CORS issue by adding middleware"
+pralph compound --story-id AUTH-001
+
+# 8. Browse and edit stories in the web viewer
 pralph viewer
 ```
 
@@ -107,6 +123,11 @@ All state lives in `.pralph/` within your project:
   run-log.jsonl         # Iteration log
   review-feedback/      # Per-story review notes
   prompts/              # Project-level prompt overrides
+  solutions/            # Compound learning knowledge base
+    index.jsonl         # Lightweight index for fast keyword search
+    build-errors/       # Categorized solution documents
+    runtime-errors/
+    ...
 ```
 
 ## Story viewer
@@ -177,6 +198,7 @@ Use project-level overrides to tailor behavior for a specific project, or home-l
 | `implement-phase1-analyze.md` | Implement | Architecture-first grouping analysis |
 | `implement-phase1.md` | Implement | Phase 1 batch implementation |
 | `review.md` | Implement | Code review after implementation |
+| `compound.md` | Compound | Solution capture after implementation |
 
 Templates use `{{variable}}` placeholders that are substituted at runtime (e.g. `{{design_doc}}`, `{{user_prompt}}`, `{{existing_stories}}`). Check the built-in defaults in `pralph/prompts/` to see which variables each template expects.
 
@@ -186,6 +208,8 @@ pralph is heavily inspired by:
 
 - **[Ralph](https://github.com/anthropics/ralph)** — Anthropic's official Claude Code plugin for AI-driven product development workflows.
 - **[RalphX](https://github.com/anthropics/ralphx)** — The extended version of Ralph with multi-phase planning, story extraction, and implementation loops.
+
+- **[compound-engineering-plugin](https://github.com/EveryInc/compound-engineering-plugin)** — Every Inc's compound learning plugin whose philosophy of documenting solutions to build institutional knowledge inspired pralph's compound learning feature.
 
 pralph reimplements and extends these ideas with an external orchestration approach, driving Claude Code as a subprocess rather than running as a plugin within it.
 

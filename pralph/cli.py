@@ -5,7 +5,7 @@ import os
 import click
 
 from pralph import __version__
-from pralph.loop import run_add, run_ideate_loop, run_implement_loop, run_plan_loop, run_refine, run_stories_loop, run_webgen_loop
+from pralph.loop import run_add, run_compound, run_ideate_loop, run_implement_loop, run_plan_loop, run_refine, run_stories_loop, run_webgen_loop
 from pralph.viewer import run_viewer
 from pralph.models import PhaseState, Story, StoryStatus
 from pralph.state import StateManager
@@ -31,7 +31,7 @@ class OrderedGroup(click.Group):
     SECTIONS = [
         ("Workflow", ["plan", "stories", "webgen", "implement"]),
         ("Replan", ["add", "ideate", "refine"]),
-        ("Tools", ["viewer"]),
+        ("Tools", ["compound", "viewer"]),
     ]
 
     def list_commands(self, ctx):
@@ -338,10 +338,11 @@ def refine(ctx, instruction, story_ids, id_pattern):
 @click.option("--story-id", default=None, help="Implement a specific story")
 @click.option("--phase1/--no-phase1", default=True, help="Architecture-first grouping")
 @click.option("--review/--no-review", default=True, help="Run reviewer after each implementation")
+@click.option("--compound/--no-compound", default=False, help="Capture learnings after each story (compound learning)")
 @click.option("--user-prompt", default="", help="Guidance for implementation (e.g. 'use FastAPI', 'use MCP for DB access')")
 @click.option("--reset", is_flag=True, help="Reset phase state and start fresh")
 @click.pass_context
-def implement(ctx, story_id, phase1, review, user_prompt, reset):
+def implement(ctx, story_id, phase1, review, compound, user_prompt, reset):
     """Phase 3: Implement stories from backlog."""
     state = StateManager(ctx.obj["project_dir"])
     if reset:
@@ -350,6 +351,7 @@ def implement(ctx, story_id, phase1, review, user_prompt, reset):
     click.echo(f"  project: {ctx.obj['project_dir']}")
     click.echo(f"  model: {ctx.obj['model']}")
     click.echo(f"  review: {'on' if review else 'off'}")
+    click.echo(f"  compound: {'on' if compound else 'off'}")
     if story_id:
         click.echo(f"  story: {story_id}")
 
@@ -361,12 +363,41 @@ def implement(ctx, story_id, phase1, review, user_prompt, reset):
         story_id=story_id,
         phase1=phase1,
         review=review,
+        compound=compound,
         user_prompt=user_prompt,
         extra_tools=_get_extra_tools(ctx, state),
         verbose=ctx.obj["verbose"],
         dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
         max_budget_usd=ctx.obj["max_budget_usd"],
     )
+
+
+@main.command()
+@click.option("--story-id", default=None, help="Story ID to capture learnings from")
+@click.option("-d", "--description", default="", help="Description of what was done")
+@click.pass_context
+def compound(ctx, story_id, description):
+    """Capture learnings from recent work (compound learning)."""
+    state = StateManager(ctx.obj["project_dir"])
+    click.echo(f"pralph compound")
+    click.echo(f"  project: {ctx.obj['project_dir']}")
+    click.echo(f"  model: {ctx.obj['model']}")
+    if story_id:
+        click.echo(f"  story: {story_id}")
+    if description:
+        click.echo(f"  description: {description[:80]}")
+
+    cost = run_compound(
+        state,
+        story_id=story_id,
+        description=description,
+        model=ctx.obj["model"],
+        verbose=ctx.obj["verbose"],
+        dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
+        max_budget_usd=ctx.obj["max_budget_usd"],
+    )
+
+    click.echo(f"\n  Cost: ${cost:.4f}")
 
 
 @main.command()

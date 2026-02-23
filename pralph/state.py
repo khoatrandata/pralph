@@ -313,3 +313,111 @@ class StateManager:
     def log_iteration(self, result: IterationResult) -> None:
         with open(self.run_log_path, "a") as f:
             f.write(json.dumps(result.to_dict()) + "\n")
+
+    # -- solutions (compound learning) --
+
+    @property
+    def solutions_dir(self) -> Path:
+        return self.state_dir / "solutions"
+
+    @property
+    def solutions_index_path(self) -> Path:
+        return self.solutions_dir / "index.jsonl"
+
+    def has_solutions(self) -> bool:
+        return self.solutions_index_path.exists() and self.solutions_index_path.stat().st_size > 0
+
+    def save_solution(
+        self,
+        category: str,
+        filename: str,
+        content: str,
+        index_entry: dict,
+    ) -> Path:
+        """Write a solution markdown file and append to index."""
+        cat_dir = self.solutions_dir / category
+        cat_dir.mkdir(parents=True, exist_ok=True)
+        solution_path = cat_dir / filename
+        solution_path.write_text(content)
+
+        # Append index entry
+        with open(self.solutions_index_path, "a") as f:
+            f.write(json.dumps(index_entry) + "\n")
+
+        return solution_path
+
+    def load_solutions_index(self) -> list[dict]:
+        """Read all index entries."""
+        entries: list[dict] = []
+        if not self.solutions_index_path.exists():
+            return entries
+        for line in self.solutions_index_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return entries
+
+    def search_solutions(self, query: str, max_results: int = 5) -> list[dict]:
+        """Keyword search on title/tags/error_signature."""
+        entries = self.load_solutions_index()
+        if not entries:
+            return []
+
+        query_lower = query.lower()
+        keywords = query_lower.split()
+
+        scored: list[tuple[int, dict]] = []
+        for entry in entries:
+            score = 0
+            title = entry.get("title", "").lower()
+            tags = [t.lower() for t in entry.get("tags", [])]
+            error_sig = entry.get("error_signature", "").lower()
+            category = entry.get("category", "").lower()
+
+            for kw in keywords:
+                if kw in title:
+                    score += 3
+                if any(kw in tag for tag in tags):
+                    score += 2
+                if kw in error_sig:
+                    score += 2
+                if kw in category:
+                    score += 1
+
+            if score > 0:
+                scored.append((score, entry))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in scored[:max_results]]
+
+    def read_solution(self, filename: str) -> str:
+        """Read a specific solution file."""
+        path = self.solutions_dir / filename
+        if path.exists():
+            return path.read_text()
+        return ""
+
+    def get_solutions_summary(self, max_chars: int = 4000) -> str:
+        """Compact summary of all solutions for prompt context."""
+        entries = self.load_solutions_index()
+        if not entries:
+            return ""
+
+        lines: list[str] = []
+        total_len = 0
+        for entry in entries:
+            title = entry.get("title", "?")
+            category = entry.get("category", "?")
+            tags = ", ".join(entry.get("tags", []))
+            line = f"- [{category}] {title} (tags: {tags})"
+            if total_len + len(line) + 1 > max_chars:
+                lines.append(f"(... and {len(entries) - len(lines)} more solutions)")
+                break
+            lines.append(line)
+            total_len += len(line) + 1
+
+        return "\n".join(lines)
