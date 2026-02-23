@@ -88,6 +88,11 @@ VIEWER_HTML = r"""<!DOCTYPE html>
   .section ul li::before { content: "✓ "; color: var(--green); font-weight: bold; }
   .dep-link { color: var(--accent); cursor: pointer; text-decoration: underline; }
 
+  .token-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; }
+  .token-grid .token-label { font-size: 12px; color: var(--muted); }
+  .token-grid .token-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .token-grid .token-sub { font-size: 11px; color: var(--muted); font-weight: 400; }
+
   .edit-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px;
     padding: 6px 16px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
   .edit-btn:hover { opacity: 0.85; }
@@ -201,11 +206,12 @@ VIEWER_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 <script>
-let stories = [], selected = null;
+let stories = [], selected = null, tokenData = {};
 
 async function load() {
-  const r = await fetch('/api/stories');
+  const [r, t] = await Promise.all([fetch('/api/stories'), fetch('/api/tokens')]);
   stories = await r.json();
+  tokenData = await t.json();
   populateFilters();
   render();
   updateStats();
@@ -299,6 +305,7 @@ function selectStory(id) {
       <h3>Dependencies</h3>
       <div>${deps}</div>
     </div>
+    ${renderTokenSection(s.id)}
     ${s.metadata && Object.keys(s.metadata).length ? `
     <div class="section">
       <h3>Metadata</h3>
@@ -310,12 +317,45 @@ function selectStory(id) {
   });
 }
 
+function fmtTokens(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function renderTokenSection(storyId) {
+  const t = tokenData[storyId];
+  if (!t || (t.input_tokens === 0 && t.output_tokens === 0)) return '';
+  const totalInput = t.input_tokens + t.cache_read_input_tokens + t.cache_creation_input_tokens;
+  return `
+    <div class="section">
+      <h3>Tokens</h3>
+      <div class="content">
+        <div class="token-grid">
+          <div><span class="token-label">Input tokens</span></div>
+          <div><span class="token-value">${fmtTokens(totalInput)}</span>
+            <span class="token-sub"> (${fmtTokens(t.input_tokens)} direct + ${fmtTokens(t.cache_read_input_tokens)} cache read + ${fmtTokens(t.cache_creation_input_tokens)} cache write)</span></div>
+          <div><span class="token-label">Output tokens</span></div>
+          <div><span class="token-value">${fmtTokens(t.output_tokens)}</span></div>
+        </div>
+      </div>
+    </div>`;
+}
+
 function updateStats() {
   const total = stories.length;
   const byStatus = {};
   stories.forEach(s => { byStatus[s.status] = (byStatus[s.status]||0) + 1; });
   const parts = Object.entries(byStatus).sort().map(([k,v]) => `${v} ${k}`);
-  document.getElementById('stats').textContent = `${total} stories — ${parts.join(' · ')}`;
+  let grandIn = 0, grandOut = 0;
+  Object.values(tokenData).forEach(t => {
+    grandIn += (t.input_tokens||0) + (t.cache_read_input_tokens||0) + (t.cache_creation_input_tokens||0);
+    grandOut += t.output_tokens||0;
+  });
+  const tokenStr = (grandIn > 0 || grandOut > 0)
+    ? ` · ${fmtTokens(grandIn)} in / ${fmtTokens(grandOut)} out`
+    : '';
+  document.getElementById('stats').textContent = `${total} stories — ${parts.join(' · ')}${tokenStr}`;
   updateProgress();
 }
 
@@ -633,6 +673,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._serve_stories()
         elif self.path == '/api/status':
             self._serve_status()
+        elif self.path == '/api/tokens':
+            self._serve_tokens()
         else:
             self._serve_html()
 
@@ -666,6 +708,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 except json.JSONDecodeError:
                     continue
         body = json.dumps(entries).encode()
+        self.send_response(HTTPStatus.OK)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_tokens(self):
+        data = self.state.get_story_tokens()
+        body = json.dumps(data).encode()
         self.send_response(HTTPStatus.OK)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))

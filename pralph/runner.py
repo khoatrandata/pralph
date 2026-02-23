@@ -30,6 +30,10 @@ class ClaudeResult:
     error: str = ""
     is_rate_limit: bool = False
     interrupted: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 # Tools per phase
@@ -406,13 +410,19 @@ def _parse_result_event(data: dict) -> ClaudeResult:
     subtype = data.get("subtype", "")
     is_success = subtype in ("success", "error_max_turns")
 
+    usage = data.get("usage", {})
+
     return ClaudeResult(
         success=is_success,
         result=data.get("result", ""),
-        cost_usd=data.get("cost_usd", 0.0),
+        cost_usd=data.get("total_cost_usd", data.get("cost_usd", 0.0)),
         session_id=data.get("session_id", ""),
         error="" if is_success else data.get("error", subtype or "unknown"),
         is_rate_limit="rate" in data.get("error", "").lower(),
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
+        cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
     )
 
 

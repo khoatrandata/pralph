@@ -78,6 +78,10 @@ class IterationResult:
     duration: float = 0.0
     cost_usd: float = 0.0
     story_id: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -90,6 +94,10 @@ class IterationResult:
             "error": self.error,
             "duration": self.duration,
             "cost_usd": self.cost_usd,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_read_input_tokens": self.cache_read_input_tokens,
+            "cache_creation_input_tokens": self.cache_creation_input_tokens,
         }
         if self.story_id:
             d["story_id"] = self.story_id

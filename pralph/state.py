@@ -314,6 +314,35 @@ class StateManager:
         with open(self.run_log_path, "a") as f:
             f.write(json.dumps(result.to_dict()) + "\n")
 
+    def get_story_tokens(self) -> dict[str, dict[str, int]]:
+        """Aggregate tokens per story from run-log.jsonl."""
+        totals: dict[str, dict[str, int]] = {}
+        if not self.run_log_path.exists():
+            return totals
+        for line in self.run_log_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            story_id = entry.get("story_id")
+            if not story_id:
+                continue
+            if story_id not in totals:
+                totals[story_id] = {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                }
+            totals[story_id]["input_tokens"] += entry.get("input_tokens", 0)
+            totals[story_id]["output_tokens"] += entry.get("output_tokens", 0)
+            totals[story_id]["cache_read_input_tokens"] += entry.get("cache_read_input_tokens", 0)
+            totals[story_id]["cache_creation_input_tokens"] += entry.get("cache_creation_input_tokens", 0)
+        return totals
+
     # -- solutions (compound learning) --
 
     @property

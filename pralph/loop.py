@@ -54,6 +54,16 @@ FOUNDATION_CATEGORIES = frozenset({
 })
 
 
+def _token_kwargs(cr: ClaudeResult) -> dict:
+    """Extract token fields from a ClaudeResult as keyword arguments for IterationResult."""
+    return {
+        "input_tokens": cr.input_tokens,
+        "output_tokens": cr.output_tokens,
+        "cache_read_input_tokens": cr.cache_read_input_tokens,
+        "cache_creation_input_tokens": cr.cache_creation_input_tokens,
+    }
+
+
 # ── generic iteration loop ───────────────────────────────────────────
 
 
@@ -176,6 +186,7 @@ def run_plan_loop(
             return IterationResult(
                 iteration=i, phase="plan", mode="refine",
                 success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
             )
 
         parsed = parse_plan_output(result.result)
@@ -187,6 +198,7 @@ def run_plan_loop(
             iteration=i, phase="plan", mode="create" if i == 1 else "refine",
             success=True, raw_output=result.result,
             cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         )
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
@@ -248,6 +260,7 @@ def run_stories_loop(
             return IterationResult(
                 iteration=i, phase="stories", mode=mode,
                 success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
             )
 
         stories, is_complete = parse_stories_output(result.result)
@@ -270,6 +283,7 @@ def run_stories_loop(
             iteration=i, phase="stories", mode=mode,
             success=True, stories_generated=len(new_stories),
             raw_output=result.result, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         )
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
@@ -325,6 +339,7 @@ def run_add(
         state.log_iteration(IterationResult(
             iteration=1, phase="add", mode="add",
             success=False, error=result.error, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         ))
         return None
 
@@ -334,6 +349,7 @@ def run_add(
         state.log_iteration(IterationResult(
             iteration=1, phase="add", mode="add",
             success=False, error="no stories parsed", cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         ))
         return None
 
@@ -359,6 +375,7 @@ def run_add(
         success=True, stories_generated=1,
         raw_output=result.result, cost_usd=result.cost_usd,
         story_id=story.id,
+        **_token_kwargs(result),
     ))
 
     return story
@@ -398,6 +415,7 @@ def run_refine(
         state.log_iteration(IterationResult(
             iteration=1, phase="refine", mode="refine",
             success=False, error=result.error, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         ))
         return []
 
@@ -407,6 +425,7 @@ def run_refine(
         state.log_iteration(IterationResult(
             iteration=1, phase="refine", mode="refine",
             success=False, error="no stories parsed", cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         ))
         return []
 
@@ -441,6 +460,7 @@ def run_refine(
         iteration=1, phase="refine", mode="refine",
         success=True, stories_generated=len(stories),
         raw_output=result.result, cost_usd=result.cost_usd,
+        **_token_kwargs(result),
     ))
 
     return stories
@@ -482,6 +502,7 @@ def run_ideate_loop(
             return IterationResult(
                 iteration=i, phase="ideate", mode="ideate",
                 success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
             )
 
         stories, _ = parse_stories_output(result.result)
@@ -508,6 +529,7 @@ def run_ideate_loop(
             iteration=i, phase="ideate", mode="ideate",
             success=True, stories_generated=len(new_stories),
             raw_output=result.result, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         )
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
@@ -568,6 +590,7 @@ def run_webgen_loop(
             return IterationResult(
                 iteration=i, phase="webgen", mode="webgen",
                 success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
             )
 
         stories, is_complete = parse_stories_output(result.result)
@@ -591,6 +614,7 @@ def run_webgen_loop(
             iteration=i, phase="webgen", mode="webgen",
             success=True, stories_generated=len(new_stories),
             raw_output=result.result, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
         )
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
@@ -713,6 +737,7 @@ def run_implement_loop(
                 return IterationResult(
                     iteration=i, phase="implement", mode="phase1_analyze",
                     success=False, error=result.error, cost_usd=result.cost_usd,
+                    **_token_kwargs(result),
                 )
 
             data = extract_json_from_text(result.result)
@@ -721,6 +746,7 @@ def run_implement_loop(
                     iteration=i, phase="implement", mode="phase1_analyze",
                     success=False, error="Could not parse phase1 group from analysis",
                     cost_usd=result.cost_usd,
+                    **_token_kwargs(result),
                 )
 
             # Save analysis to file for the implement step
@@ -735,6 +761,7 @@ def run_implement_loop(
             return IterationResult(
                 iteration=i, phase="implement", mode="phase1_analyze",
                 success=True, raw_output=result.result, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
             )
 
         # ── implement: one story per iteration ──
@@ -780,12 +807,14 @@ def run_implement_loop(
                     error=result.error if result.error == "aborted" else "",
                     impl_status=result.error,
                     cost_usd=result.cost_usd, story_id=story.id,
+                    **_token_kwargs(result),
                 )
             state.mark_story_status(story.id, StoryStatus.error, summary=result.error[:200])
             return IterationResult(
                 iteration=i, phase="implement", mode="implement",
                 success=False, error=result.error, cost_usd=result.cost_usd,
                 story_id=story.id,
+                **_token_kwargs(result),
             )
 
         parsed = parse_implement_output(result.result)
@@ -802,6 +831,10 @@ def run_implement_loop(
         click.echo(f"  → {story.id}: {click.style(new_status.value, fg=status_color)} — {summary[:120]}")
 
         total_cost = result.cost_usd
+        total_input = result.input_tokens
+        total_output = result.output_tokens
+        total_cache_read = result.cache_read_input_tokens
+        total_cache_create = result.cache_creation_input_tokens
 
         # Review step: run on fresh Claude instance after successful implementation
         if new_status == StoryStatus.implemented and review:
@@ -815,6 +848,10 @@ def run_implement_loop(
             )
             if review_result is not None:
                 total_cost += review_result.cost_usd
+                total_input += review_result.input_tokens
+                total_output += review_result.output_tokens
+                total_cache_read += review_result.cache_read_input_tokens
+                total_cache_create += review_result.cache_creation_input_tokens
                 if not review_result.approved:
                     new_status = StoryStatus.rework
                     state.mark_story_status(story.id, StoryStatus.rework, summary="Review rejected")
@@ -822,7 +859,7 @@ def run_implement_loop(
 
         # Compound learning: capture solutions after successful implementation
         if new_status == StoryStatus.implemented and compound:
-            compound_cost = _run_compound_capture(
+            compound_result = _run_compound_capture(
                 state, story,
                 model=model,
                 system_prompt=system_prompt,
@@ -830,7 +867,11 @@ def run_implement_loop(
                 dangerously_skip_permissions=dangerously_skip_permissions,
                 max_budget_usd=max_budget_usd,
             )
-            total_cost += compound_cost
+            total_cost += compound_result.cost_usd
+            total_input += compound_result.input_tokens
+            total_output += compound_result.output_tokens
+            total_cache_read += compound_result.cache_read_input_tokens
+            total_cache_create += compound_result.cache_creation_input_tokens
 
         # Clean up analysis file when all its stories are done
         if new_status == StoryStatus.implemented and state.phase1_analysis_path.exists():
@@ -846,6 +887,10 @@ def run_implement_loop(
             iteration=i, phase="implement", mode="implement",
             success=True, impl_status=new_status.value,
             cost_usd=total_cost, story_id=story.id,
+            input_tokens=total_input,
+            output_tokens=total_output,
+            cache_read_input_tokens=total_cache_read,
+            cache_creation_input_tokens=total_cache_create,
         )
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
@@ -866,6 +911,10 @@ class _ReviewResult:
     feedback: str
     issues: list
     cost_usd: float
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 def _run_review(
@@ -928,6 +977,10 @@ def _run_review(
         feedback=feedback,
         issues=issues,
         cost_usd=result.cost_usd,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cache_read_input_tokens=result.cache_read_input_tokens,
+        cache_creation_input_tokens=result.cache_creation_input_tokens,
     )
 
 
@@ -1033,6 +1086,15 @@ def _slugify(text: str) -> str:
     return slug[:80].strip("-")
 
 
+@dataclass
+class _CompoundResult:
+    cost_usd: float
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
 def _run_compound_capture(
     state: StateManager,
     story: Story,
@@ -1042,8 +1104,8 @@ def _run_compound_capture(
     verbose: bool,
     dangerously_skip_permissions: bool,
     max_budget_usd: float | None,
-) -> float:
-    """Run compound learning capture after a successful implementation. Returns cost."""
+) -> _CompoundResult:
+    """Run compound learning capture after a successful implementation. Returns result with cost and tokens."""
     click.echo(click.style(f"  Capturing learnings: {story.id}", fg='magenta', bold=True))
 
     prompt = assemble_compound_prompt(state, story)
@@ -1061,13 +1123,13 @@ def _run_compound_capture(
 
     if not result.success:
         click.echo(click.style(f"  Compound capture failed: {result.error[:120]}", fg='yellow'))
-        return result.cost_usd
+        return _CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
 
     parsed = parse_compound_output(result.result)
 
     if not parsed["captured"]:
         click.echo(click.style(f"  Nothing notable: {parsed['reason'][:120]}", fg='yellow'))
-        return result.cost_usd
+        return _CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
 
     solutions = parsed.get("solutions", [])
     for sol in solutions:
@@ -1108,7 +1170,7 @@ def _run_compound_capture(
         click.echo(click.style(f"  + {title}", fg='green') + f" → {path}")
 
     click.echo(click.style(f"  Captured {len(solutions)} solution(s)", fg='green', bold=True))
-    return result.cost_usd
+    return _CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
 
 
 def run_compound(
@@ -1140,7 +1202,7 @@ def run_compound(
             content=description,
         )
 
-    return _run_compound_capture(
+    cr = _run_compound_capture(
         state, story,
         model=model,
         system_prompt=system_prompt,
@@ -1148,6 +1210,7 @@ def run_compound(
         dangerously_skip_permissions=dangerously_skip_permissions,
         max_budget_usd=max_budget_usd,
     )
+    return cr.cost_usd
 
 
 def _sort_stories(stories: list[Story]) -> list[Story]:
