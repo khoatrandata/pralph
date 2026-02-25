@@ -373,7 +373,9 @@ class StateManager:
             if not line:
                 continue
             try:
-                entries.append(json.loads(line))
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    entries.append(parsed)
             except json.JSONDecodeError:
                 continue
         return entries
@@ -389,6 +391,8 @@ class StateManager:
 
         scored: list[tuple[int, dict]] = []
         for entry in entries:
+            if not isinstance(entry, dict):
+                continue
             score = 0
             title = (entry.get("title") or "").lower()
             tags = [t.lower() for t in (entry.get("tags") or [])]
