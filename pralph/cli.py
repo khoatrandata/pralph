@@ -373,7 +373,7 @@ def implement(ctx, story_id, phase1, review, compound, prompt, reset):
     state = StateManager(ctx.obj["project_dir"])
     if reset:
         _reset_phase(state, "implement")
-    prompt = _resolve_prompt(prompt, "Implementation guidance")
+    prompt = prompt or _read_stdin() or ""
     click.echo(f"pralph implement — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {ctx.obj['project_dir']}")
     click.echo(f"  model: {ctx.obj['model']}")
