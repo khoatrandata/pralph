@@ -390,10 +390,10 @@ class StateManager:
         scored: list[tuple[int, dict]] = []
         for entry in entries:
             score = 0
-            title = entry.get("title", "").lower()
-            tags = [t.lower() for t in entry.get("tags", [])]
-            error_sig = entry.get("error_signature", "").lower()
-            category = entry.get("category", "").lower()
+            title = (entry.get("title") or "").lower()
+            tags = [t.lower() for t in (entry.get("tags") or [])]
+            error_sig = (entry.get("error_signature") or "").lower()
+            category = (entry.get("category") or "").lower()
 
             for kw in keywords:
                 if kw in title:
