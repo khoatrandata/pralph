@@ -69,7 +69,7 @@ def _start_elapsed_timer(start_time: float) -> threading.Event:
             with _timer_lock:
                 elapsed = int(time.monotonic() - _timer_origin[0])
                 m, s = divmod(elapsed, 60)
-                sys.stderr.write(f"\r  \u23f3 running {m}:{s:02d}")
+                sys.stderr.write(f"\r  \u23f3 running {m}:{s:02d}  \033[2m(ESC to interrupt)\033[0m")
                 sys.stderr.flush()
                 _timer_active = True
             stop.wait(1.0)
@@ -111,29 +111,39 @@ def run_claude(
     timeout: int = 600,
     verbose: bool = False,
     project_dir: str | None = None,
+    resume_session_id: str | None = None,
 ) -> ClaudeResult:
     """Invoke claude -p as a subprocess with streaming output.
 
     Monitors stdin for ESC key — on press, kills the subprocess and presents
     an interrupt menu (take over interactively / skip / abort).
     """
-    session_id = str(uuid.uuid4())
-    cmd = [
-        "claude", "-p", "--verbose", "--model", model,
-        "--output-format", "stream-json", "--session-id", session_id,
-    ]
+    if resume_session_id:
+        session_id = resume_session_id
+        cmd = [
+            "claude", "--resume", resume_session_id,
+            "--verbose", "--output-format", "stream-json",
+        ]
+        if dangerously_skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+    else:
+        session_id = str(uuid.uuid4())
+        cmd = [
+            "claude", "-p", "--verbose", "--model", model,
+            "--output-format", "stream-json", "--session-id", session_id,
+        ]
 
-    if allowed_tools:
-        cmd.extend(["--allowedTools", allowed_tools])
+        if allowed_tools:
+            cmd.extend(["--allowedTools", allowed_tools])
 
-    if system_prompt:
-        cmd.extend(["--append-system-prompt", system_prompt])
+        if system_prompt:
+            cmd.extend(["--append-system-prompt", system_prompt])
 
-    if dangerously_skip_permissions:
-        cmd.append("--dangerously-skip-permissions")
+        if dangerously_skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
 
-    if max_budget_usd is not None:
-        cmd.extend(["--max-budget-usd", str(max_budget_usd)])
+        if max_budget_usd is not None:
+            cmd.extend(["--max-budget-usd", str(max_budget_usd)])
 
     cwd = project_dir or None
 
@@ -157,7 +167,8 @@ def run_claude(
 
     # Send prompt on stdin, then close
     assert proc.stdin is not None
-    proc.stdin.write(prompt)
+    if not resume_session_id:
+        proc.stdin.write(prompt)
     proc.stdin.close()
 
     # Read streaming NDJSON lines from stdout, printing progress as we go
@@ -239,7 +250,17 @@ def run_claude(
 
     # Check if interrupted by ESC
     if monitor_state and monitor_state[0].is_set():
-        return _handle_interrupt(session_id, cwd)
+        result = _handle_interrupt(session_id, cwd)
+        if result.error == "continue":
+            return run_claude(
+                prompt,
+                resume_session_id=result.session_id,
+                dangerously_skip_permissions=dangerously_skip_permissions,
+                timeout=timeout,
+                verbose=verbose,
+                project_dir=project_dir,
+            )
+        return result
 
     # Check stderr for errors
     stderr = proc.stderr.read().strip()
@@ -335,19 +356,25 @@ def _handle_interrupt(session_id: str, project_dir: str | None) -> ClaudeResult:
     click.echo()
     click.echo(click.style("  ⏸  Interrupted", fg="yellow", bold=True))
     click.echo()
-    click.echo("  [1] Take over — resume session interactively")
-    click.echo("  [2] Skip — continue to next iteration")
-    click.echo("  [3] Abort — stop the loop")
+    click.echo("  [1] Continue  — resume where it left off")
+    click.echo("  [2] Take over — open interactive session")
+    click.echo("  [3] Skip      — continue to next iteration")
+    click.echo("  [4] Abort     — stop the loop")
     click.echo()
     choice = click.prompt(
-        "  Choice", type=click.Choice(["1", "2", "3"]), default="1",
+        "  Choice", type=click.Choice(["1", "2", "3", "4"]), default="1",
     )
 
     if choice == "1":
+        return ClaudeResult(
+            success=False, error="continue",
+            session_id=session_id, interrupted=True,
+        )
+    elif choice == "2":
         click.echo(click.style("\n  Entering interactive mode...\n", fg="cyan", bold=True))
         resume_interactive(session_id, project_dir)
         return _post_takeover_menu(session_id)
-    elif choice == "2":
+    elif choice == "3":
         return ClaudeResult(
             success=False, error="interrupted",
             session_id=session_id, interrupted=True,
