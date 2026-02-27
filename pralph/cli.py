@@ -366,9 +366,10 @@ def refine(ctx, instruction, prompt, story_ids, id_pattern):
 @click.option("--review/--no-review", default=True, help="Run reviewer after each implementation")
 @click.option("--compound/--no-compound", default=False, help="Capture learnings after each story (compound learning)")
 @click.option("--prompt", default=None, help="Guidance for implementation (e.g. 'use FastAPI', 'use MCP for DB access')")
+@click.option("--parallel", default=1, type=click.IntRange(min=1), help="Max concurrent stories (default: 1 = sequential)")
 @click.option("--reset", is_flag=True, help="Reset phase state and start fresh")
 @click.pass_context
-def implement(ctx, story_id, phase1, review, compound, prompt, reset):
+def implement(ctx, story_id, phase1, review, compound, prompt, parallel, reset):
     """Phase 3: Implement stories from backlog."""
     state = StateManager(ctx.obj["project_dir"])
     if reset:
@@ -379,6 +380,8 @@ def implement(ctx, story_id, phase1, review, compound, prompt, reset):
     click.echo(f"  model: {ctx.obj['model']}")
     click.echo(f"  review: {'on' if review else 'off'}")
     click.echo(f"  compound: {'on' if compound else 'off'}")
+    if parallel > 1:
+        click.echo(f"  parallel: {parallel}")
     if story_id:
         click.echo(f"  story: {story_id}")
 
@@ -396,6 +399,7 @@ def implement(ctx, story_id, phase1, review, compound, prompt, reset):
         verbose=ctx.obj["verbose"],
         dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
         max_budget_usd=ctx.obj["max_budget_usd"],
+        parallel=parallel,
     )
 
 

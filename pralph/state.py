@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ class StateManager:
         self.project_dir = Path(project_dir)
         self.state_dir = self.project_dir / ".pralph"
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
 
     # -- file paths --
 
@@ -152,9 +154,10 @@ class StateManager:
         return stories
 
     def append_stories(self, stories: list[Story]) -> None:
-        with open(self.stories_path, "a") as f:
-            for s in stories:
-                f.write(json.dumps(s.to_dict()) + "\n")
+        with self._lock:
+            with open(self.stories_path, "a") as f:
+                for s in stories:
+                    f.write(json.dumps(s.to_dict()) + "\n")
 
     def get_pending_stories(self) -> list[Story]:
         return [s for s in self.load_stories() if s.status == StoryStatus.pending]
@@ -168,31 +171,32 @@ class StateManager:
 
     def recover_orphaned_stories(self) -> list[Story]:
         """Find in_progress stories (orphans from crashes) and reset to pending."""
-        stories = self.load_stories()
-        recovered: list[Story] = []
+        with self._lock:
+            stories = self.load_stories()
+            recovered: list[Story] = []
 
-        for s in stories:
-            if s.status == StoryStatus.in_progress:
-                s.status = StoryStatus.pending
-                s.metadata["previous_attempt"] = {
-                    "was_in_progress": True,
-                    "recovered_at": datetime.now().isoformat(),
-                }
-                recovered.append(s)
-
-        if recovered:
-            self._rewrite_stories(stories)
-            with open(self.status_path, "a") as f:
-                for s in recovered:
-                    entry = {
-                        "story_id": s.id,
-                        "status": "pending",
-                        "summary": "Recovered from crash (was in_progress)",
-                        "recovery": True,
+            for s in stories:
+                if s.status == StoryStatus.in_progress:
+                    s.status = StoryStatus.pending
+                    s.metadata["previous_attempt"] = {
+                        "was_in_progress": True,
+                        "recovered_at": datetime.now().isoformat(),
                     }
-                    f.write(json.dumps(entry) + "\n")
+                    recovered.append(s)
 
-        return recovered
+            if recovered:
+                self._rewrite_stories(stories)
+                with open(self.status_path, "a") as f:
+                    for s in recovered:
+                        entry = {
+                            "story_id": s.id,
+                            "status": "pending",
+                            "summary": "Recovered from crash (was in_progress)",
+                            "recovery": True,
+                        }
+                        f.write(json.dumps(entry) + "\n")
+
+            return recovered
 
     def get_story_ids(self) -> set[str]:
         return {s.id for s in self.load_stories()}
@@ -242,24 +246,26 @@ class StateManager:
         summary: str = "",
         extra: dict | None = None,
     ) -> None:
-        entry = {
-            "story_id": story_id,
-            "status": status.value,
-            "summary": summary,
-            **(extra or {}),
-        }
-        with open(self.status_path, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        with self._lock:
+            entry = {
+                "story_id": story_id,
+                "status": status.value,
+                "summary": summary,
+                **(extra or {}),
+            }
+            with open(self.status_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
 
-        # Also rewrite stories.jsonl with updated status
-        stories = self.load_stories()
-        for s in stories:
-            if s.id == story_id:
-                s.status = status
-                break
-        self._rewrite_stories(stories)
+            # Also rewrite stories.jsonl with updated status
+            stories = self.load_stories()
+            for s in stories:
+                if s.id == story_id:
+                    s.status = status
+                    break
+            self._rewrite_stories(stories)
 
     def _rewrite_stories(self, stories: list[Story]) -> None:
+        """Write all stories to disk. Caller must hold self._lock."""
         with open(self.stories_path, "w") as f:
             for s in stories:
                 f.write(json.dumps(s.to_dict()) + "\n")
@@ -294,13 +300,15 @@ class StateManager:
         return PhaseState(phase=phase)
 
     def save_phase_state(self, state: PhaseState) -> None:
-        self.phase_state_path.write_text(json.dumps(state.to_dict(), indent=2) + "\n")
+        with self._lock:
+            self.phase_state_path.write_text(json.dumps(state.to_dict(), indent=2) + "\n")
 
     # -- run log --
 
     def log_iteration(self, result: IterationResult) -> None:
-        with open(self.run_log_path, "a") as f:
-            f.write(json.dumps(result.to_dict()) + "\n")
+        with self._lock:
+            with open(self.run_log_path, "a") as f:
+                f.write(json.dumps(result.to_dict()) + "\n")
 
     def get_story_tokens(self) -> dict[str, dict[str, int]]:
         """Aggregate tokens per story from run-log.jsonl."""
@@ -352,16 +360,17 @@ class StateManager:
         index_entry: dict,
     ) -> Path:
         """Write a solution markdown file and append to index."""
-        cat_dir = self.solutions_dir / category
-        cat_dir.mkdir(parents=True, exist_ok=True)
-        solution_path = cat_dir / filename
-        solution_path.write_text(content)
+        with self._lock:
+            cat_dir = self.solutions_dir / category
+            cat_dir.mkdir(parents=True, exist_ok=True)
+            solution_path = cat_dir / filename
+            solution_path.write_text(content)
 
-        # Append index entry
-        with open(self.solutions_index_path, "a") as f:
-            f.write(json.dumps(index_entry) + "\n")
+            # Append index entry
+            with open(self.solutions_index_path, "a") as f:
+                f.write(json.dumps(index_entry) + "\n")
 
-        return solution_path
+            return solution_path
 
     def load_solutions_index(self) -> list[dict]:
         """Read all index entries."""
