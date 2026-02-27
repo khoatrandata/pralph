@@ -115,6 +115,14 @@ class StateManager:
     def clear_review_feedback(self, story_id: str) -> None:
         self.review_feedback_path(story_id).unlink(missing_ok=True)
 
+    # -- claude session validation --
+
+    def claude_session_exists(self, session_id: str) -> bool:
+        """Check if a Claude session file exists on disk."""
+        encoded = str(self.project_dir).replace("/", "-")
+        path = Path.home() / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
+        return path.exists()
+
     # -- design doc --
 
     def read_design_doc(self) -> str:

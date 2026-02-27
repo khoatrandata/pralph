@@ -115,9 +115,12 @@ class PhaseState:
     total_cost_usd: float = 0.0
     last_error: str = ""
     last_summary: str = ""
+    active_session_id: str = ""
+    active_story_id: str = ""
+    active_session_started: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "phase": self.phase,
             "current_iteration": self.current_iteration,
             "consecutive_empty": self.consecutive_empty,
@@ -128,6 +131,13 @@ class PhaseState:
             "last_error": self.last_error,
             "last_summary": self.last_summary,
         }
+        if self.active_session_id:
+            d["active_session_id"] = self.active_session_id
+        if self.active_story_id:
+            d["active_story_id"] = self.active_story_id
+        if self.active_session_started:
+            d["active_session_started"] = self.active_session_started
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PhaseState:
@@ -141,4 +151,7 @@ class PhaseState:
             total_cost_usd=d.get("total_cost_usd", 0.0),
             last_error=d.get("last_error", ""),
             last_summary=d.get("last_summary", ""),
+            active_session_id=d.get("active_session_id", ""),
+            active_story_id=d.get("active_story_id", ""),
+            active_session_started=d.get("active_session_started", ""),
         )

@@ -112,6 +112,7 @@ def run_claude(
     verbose: bool = False,
     project_dir: str | None = None,
     resume_session_id: str | None = None,
+    session_id: str | None = None,
 ) -> ClaudeResult:
     """Invoke claude -p as a subprocess with streaming output.
 
@@ -121,13 +122,13 @@ def run_claude(
     if resume_session_id:
         session_id = resume_session_id
         cmd = [
-            "claude", "--resume", resume_session_id,
+            "claude", "-p", "--resume", resume_session_id,
             "--verbose", "--output-format", "stream-json",
         ]
         if dangerously_skip_permissions:
             cmd.append("--dangerously-skip-permissions")
     else:
-        session_id = str(uuid.uuid4())
+        session_id = session_id or str(uuid.uuid4())
         cmd = [
             "claude", "-p", "--verbose", "--model", model,
             "--output-format", "stream-json", "--session-id", session_id,
@@ -167,7 +168,7 @@ def run_claude(
 
     # Send prompt on stdin, then close
     assert proc.stdin is not None
-    if not resume_session_id:
+    if prompt:
         proc.stdin.write(prompt)
     proc.stdin.close()
 
@@ -215,7 +216,7 @@ def run_claude(
                     post = _post_takeover_menu(session_id)
                     if post == "resume":
                         return run_claude(
-                            prompt,
+                            "",
                             resume_session_id=session_id,
                             dangerously_skip_permissions=dangerously_skip_permissions,
                             timeout=timeout,

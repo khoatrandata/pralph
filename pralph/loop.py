@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
@@ -43,6 +44,7 @@ from pralph.runner import (
     STORIES_TOOLS_EXTRACT,
     STORIES_TOOLS_RESEARCH,
     ClaudeResult,
+    resume_interactive,
     run_with_retry,
 )
 from pralph.state import StateManager
@@ -64,6 +66,38 @@ def _token_kwargs(cr: ClaudeResult) -> dict:
     }
 
 
+# ── session resume support ───────────────────────────────────────────
+
+
+def _session_resume_prompt(ps: PhaseState) -> str:
+    """Show resume prompt for interrupted session. Returns choice string."""
+    click.echo()
+    click.echo(click.style("  \U0001f504 Found interrupted session", fg="yellow", bold=True))
+    click.echo(f"   Phase: {ps.phase}", nl=False)
+    if ps.active_story_id:
+        click.echo(f", Story: {ps.active_story_id}", nl=False)
+    click.echo()
+    if ps.active_session_started:
+        click.echo(f"   Started: {ps.active_session_started}")
+    click.echo()
+    click.echo("   [1] Resume headlessly  \u2014 continue automated session")
+    click.echo("   [2] Resume interactive \u2014 open interactive Claude session")
+    click.echo("   [3] Start fresh        \u2014 start a new session")
+    click.echo("   [4] Abort")
+    click.echo()
+    choice = click.prompt(
+        "   Choice", type=click.Choice(["1", "2", "3", "4"]), default="1",
+    )
+    return {"1": "headless", "2": "interactive", "3": "fresh", "4": "abort"}[choice]
+
+
+def _clear_session_tracking(ps: PhaseState) -> None:
+    """Clear active session tracking fields on PhaseState."""
+    ps.active_session_id = ""
+    ps.active_story_id = ""
+    ps.active_session_started = ""
+
+
 # ── generic iteration loop ───────────────────────────────────────────
 
 
@@ -74,10 +108,48 @@ def _run_loop(
     cooldown: int,
     iteration_fn: Callable[[int, PhaseState], IterationResult],
     completion_fn: Callable[[IterationResult, PhaseState], bool],
+    resume_fn: Callable[[str, PhaseState], IterationResult] | None = None,
     verbose: bool = False,
 ) -> PhaseState:
     """Generic iteration loop shared by all phases."""
     ps = state.load_phase_state(phase)
+
+    # Check for resumable session from previous crash
+    if ps.active_session_id and resume_fn:
+        if not state.claude_session_exists(ps.active_session_id):
+            click.echo("  Previous session not found on disk, starting fresh")
+            _clear_session_tracking(ps)
+            state.save_phase_state(ps)
+        else:
+            choice = _session_resume_prompt(ps)
+            if choice == "headless":
+                result = resume_fn(ps.active_session_id, ps)
+                state.log_iteration(result)
+                ps.total_cost_usd += result.cost_usd
+                _clear_session_tracking(ps)
+                if result.success:
+                    ps.consecutive_errors = 0
+                if completion_fn(result, ps):
+                    ps.completed = True
+                    state.save_phase_state(ps)
+                    return ps
+                state.save_phase_state(ps)
+            elif choice == "interactive":
+                resume_interactive(ps.active_session_id, str(state.project_dir))
+                _clear_session_tracking(ps)
+                state.save_phase_state(ps)
+            elif choice == "abort":
+                ps.completed = True
+                ps.completion_reason = "user_aborted"
+                state.save_phase_state(ps)
+                return ps
+            else:  # "fresh"
+                _clear_session_tracking(ps)
+                state.save_phase_state(ps)
+    elif ps.active_session_id:
+        # No resume_fn but stale tracking — clear it
+        _clear_session_tracking(ps)
+        state.save_phase_state(ps)
 
     # Only truly "done" completions block re-running.
     # Everything else (errors, max_iterations) is resumable.
@@ -175,6 +247,11 @@ def run_plan_loop(
     def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
         prompt = assemble_plan_prompt(state, iteration=i, total=total, user_prompt=user_prompt, phase_state=ps)
 
+        sid = str(uuid.uuid4())
+        ps.active_session_id = sid
+        ps.active_session_started = datetime.now().isoformat()
+        state.save_phase_state(ps)
+
         result = run_with_retry(
             prompt,
             model=model,
@@ -185,7 +262,10 @@ def run_plan_loop(
             timeout=900,
             verbose=verbose,
             project_dir=str(state.project_dir),
+            session_id=sid,
         )
+
+        _clear_session_tracking(ps)
 
         if not result.success:
             return IterationResult(
@@ -206,6 +286,32 @@ def run_plan_loop(
             **_token_kwargs(result),
         )
 
+    def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
+        result = run_with_retry(
+            "Continue refining the design document.",
+            resume_session_id=session_id,
+            timeout=900,
+            project_dir=str(state.project_dir),
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            verbose=verbose,
+        )
+        if not result.success:
+            return IterationResult(
+                iteration=ps.current_iteration, phase="plan", mode="resume",
+                success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
+            )
+        parsed = parse_plan_output(result.result)
+        summary = parsed.get("changes_summary", "")
+        if summary:
+            click.echo(click.style("  Changes:", fg='blue') + f" {summary[:200]}")
+        return IterationResult(
+            iteration=ps.current_iteration, phase="plan", mode="resume",
+            success=True, raw_output=result.result,
+            cost_usd=result.cost_usd,
+            **_token_kwargs(result),
+        )
+
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
         if result.raw_output and any(
             line.strip() == "[PLANNING_COMPLETE]" for line in result.raw_output.splitlines()
@@ -217,7 +323,7 @@ def run_plan_loop(
             return True
         return False
 
-    return _run_loop("plan", state, max_iterations, cooldown, iteration_fn, completion_fn, verbose)
+    return _run_loop("plan", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
 
 
 # ── Phase 2: Stories ──────────────────────────────────────────────────
@@ -249,6 +355,11 @@ def run_stories_loop(
         prompt = assemble_stories_prompt(state, mode=mode, phase_state=ps)
         tools = STORIES_TOOLS_RESEARCH if mode == "research" else STORIES_TOOLS_EXTRACT
 
+        sid = str(uuid.uuid4())
+        ps.active_session_id = sid
+        ps.active_session_started = datetime.now().isoformat()
+        state.save_phase_state(ps)
+
         result = run_with_retry(
             prompt,
             model=model,
@@ -259,7 +370,10 @@ def run_stories_loop(
             timeout=900 if mode == "research" else 600,
             verbose=verbose,
             project_dir=str(state.project_dir),
+            session_id=sid,
         )
+
+        _clear_session_tracking(ps)
 
         if not result.success:
             return IterationResult(
@@ -291,6 +405,42 @@ def run_stories_loop(
             **_token_kwargs(result),
         )
 
+    def _stories_resume_process(result: ClaudeResult) -> IterationResult:
+        """Shared result processing for stories resume."""
+        if not result.success:
+            return IterationResult(
+                iteration=0, phase="stories", mode="resume",
+                success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
+            )
+        stories, _ = parse_stories_output(result.result)
+        existing_ids = state.get_story_ids()
+        new_stories = [s for s in stories if s.id not in existing_ids]
+        if new_stories:
+            state.append_stories(new_stories)
+            click.echo(click.style(f"  +{len(new_stories)} stories (resumed)", fg='green', bold=True))
+            for s in new_stories:
+                click.echo(f"    {click.style(s.id, fg='blue')}: {s.title}")
+        return IterationResult(
+            iteration=0, phase="stories", mode="resume",
+            success=True, stories_generated=len(new_stories),
+            raw_output=result.result, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
+        )
+
+    def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
+        result = run_with_retry(
+            "Continue extracting stories.",
+            resume_session_id=session_id,
+            timeout=900,
+            project_dir=str(state.project_dir),
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            verbose=verbose,
+        )
+        ir = _stories_resume_process(result)
+        ir.iteration = ps.current_iteration
+        return ir
+
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
         if detect_completion_signal(result.raw_output):
             ps.completion_reason = "generation_complete"
@@ -303,7 +453,7 @@ def run_stories_loop(
             return True
         return False
 
-    ps = _run_loop("stories", state, max_iterations, cooldown, iteration_fn, completion_fn, verbose)
+    ps = _run_loop("stories", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
 
     total = len(state.load_stories())
     click.echo(f"\n  Total stories: {total}")
@@ -491,6 +641,11 @@ def run_ideate_loop(
     def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
         prompt = assemble_ideate_prompt(state, ideas_text=ideas_text, phase_state=ps)
 
+        sid = str(uuid.uuid4())
+        ps.active_session_id = sid
+        ps.active_session_started = datetime.now().isoformat()
+        state.save_phase_state(ps)
+
         result = run_with_retry(
             prompt,
             model=model,
@@ -501,7 +656,10 @@ def run_ideate_loop(
             timeout=900,
             verbose=verbose,
             project_dir=str(state.project_dir),
+            session_id=sid,
         )
+
+        _clear_session_tracking(ps)
 
         if not result.success:
             return IterationResult(
@@ -537,6 +695,38 @@ def run_ideate_loop(
             **_token_kwargs(result),
         )
 
+    def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
+        result = run_with_retry(
+            "Continue processing ideas into stories.",
+            resume_session_id=session_id,
+            timeout=900,
+            project_dir=str(state.project_dir),
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            verbose=verbose,
+        )
+        if not result.success:
+            return IterationResult(
+                iteration=ps.current_iteration, phase="ideate", mode="resume",
+                success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
+            )
+        stories, _ = parse_stories_output(result.result)
+        for s in stories:
+            s.source = "ideate"
+        existing_ids = state.get_story_ids()
+        new_stories = [s for s in stories if s.id not in existing_ids]
+        if new_stories:
+            state.append_stories(new_stories)
+            click.echo(click.style(f"  +{len(new_stories)} stories (resumed)", fg='green', bold=True))
+            for s in new_stories:
+                click.echo(f"    {click.style(s.id, fg='blue')}: {s.title}")
+        return IterationResult(
+            iteration=ps.current_iteration, phase="ideate", mode="resume",
+            success=True, stories_generated=len(new_stories),
+            raw_output=result.result, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
+        )
+
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
         if detect_ideation_complete(result.raw_output):
             ps.completion_reason = "ideation_complete"
@@ -549,7 +739,7 @@ def run_ideate_loop(
             return True
         return False
 
-    ps = _run_loop("ideate", state, max_iterations, cooldown, iteration_fn, completion_fn, verbose)
+    ps = _run_loop("ideate", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
 
     total = len(state.load_stories())
     click.echo(f"\n  Total stories: {total}")
@@ -579,6 +769,11 @@ def run_webgen_loop(
     def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
         prompt = assemble_stories_prompt(state, mode="webgen", phase_state=ps)
 
+        sid = str(uuid.uuid4())
+        ps.active_session_id = sid
+        ps.active_session_started = datetime.now().isoformat()
+        state.save_phase_state(ps)
+
         result = run_with_retry(
             prompt,
             model=model,
@@ -589,7 +784,10 @@ def run_webgen_loop(
             timeout=900,
             verbose=verbose,
             project_dir=str(state.project_dir),
+            session_id=sid,
         )
+
+        _clear_session_tracking(ps)
 
         if not result.success:
             return IterationResult(
@@ -622,6 +820,38 @@ def run_webgen_loop(
             **_token_kwargs(result),
         )
 
+    def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
+        result = run_with_retry(
+            "Continue discovering web-gen requirements.",
+            resume_session_id=session_id,
+            timeout=900,
+            project_dir=str(state.project_dir),
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            verbose=verbose,
+        )
+        if not result.success:
+            return IterationResult(
+                iteration=ps.current_iteration, phase="webgen", mode="resume",
+                success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
+            )
+        stories, _ = parse_stories_output(result.result)
+        existing_ids = state.get_story_ids()
+        new_stories = [s for s in stories if s.id not in existing_ids]
+        if new_stories:
+            for s in new_stories:
+                s.source = "webgen"
+            state.append_stories(new_stories)
+            click.echo(click.style(f"  +{len(new_stories)} webgen stories (resumed)", fg='green', bold=True))
+            for s in new_stories:
+                click.echo(f"    {click.style(s.id, fg='blue')}: {s.title}")
+        return IterationResult(
+            iteration=ps.current_iteration, phase="webgen", mode="resume",
+            success=True, stories_generated=len(new_stories),
+            raw_output=result.result, cost_usd=result.cost_usd,
+            **_token_kwargs(result),
+        )
+
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
         if detect_completion_signal(result.raw_output):
             ps.completion_reason = "generation_complete"
@@ -634,7 +864,7 @@ def run_webgen_loop(
             return True
         return False
 
-    ps = _run_loop("webgen", state, max_iterations, cooldown, iteration_fn, completion_fn, verbose)
+    ps = _run_loop("webgen", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
 
     total = len(state.load_stories())
     click.echo(f"\n  Total stories: {total}")
@@ -790,6 +1020,13 @@ def run_implement_loop(
         ))
 
         prompt = assemble_implement_prompt(state, story, phase_state=ps, user_prompt=user_prompt)
+
+        sid = str(uuid.uuid4())
+        ps.active_session_id = sid
+        ps.active_story_id = story.id
+        ps.active_session_started = datetime.now().isoformat()
+        state.save_phase_state(ps)
+
         result = run_with_retry(
             prompt,
             model=model,
@@ -800,7 +1037,10 @@ def run_implement_loop(
             timeout=1800,
             verbose=verbose,
             project_dir=str(state.project_dir),
+            session_id=sid,
         )
+
+        _clear_session_tracking(ps)
 
         if not result.success:
             if result.error in ("interrupted", "aborted"):
@@ -898,6 +1138,81 @@ def run_implement_loop(
             cache_creation_input_tokens=total_cache_create,
         )
 
+    def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
+        story = None
+        if ps.active_story_id:
+            story = next((s for s in state.load_stories() if s.id == ps.active_story_id), None)
+        if not story:
+            return IterationResult(
+                iteration=ps.current_iteration, phase="implement", mode="resume",
+                success=False, error=f"Story '{ps.active_story_id}' not found for resume",
+            )
+
+        result = run_with_retry(
+            "Continue implementing the story.",
+            resume_session_id=session_id,
+            timeout=1800,
+            project_dir=str(state.project_dir),
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            verbose=verbose,
+        )
+
+        if not result.success:
+            state.mark_story_status(story.id, StoryStatus.error, summary=f"Resume failed: {result.error[:200]}")
+            return IterationResult(
+                iteration=ps.current_iteration, phase="implement", mode="resume",
+                success=False, error=result.error, cost_usd=result.cost_usd,
+                story_id=story.id,
+                **_token_kwargs(result),
+            )
+
+        parsed = parse_implement_output(result.result)
+        status_str = parsed.get("status", "error")
+        summary = parsed.get("summary", "")
+        try:
+            new_status = StoryStatus(status_str)
+        except ValueError:
+            new_status = StoryStatus.implemented if status_str == "completed" else StoryStatus.error
+
+        state.mark_story_status(story.id, new_status, summary=summary, extra=parsed)
+        status_color = 'green' if new_status == StoryStatus.implemented else 'yellow'
+        click.echo(f"  \u2192 {story.id}: {click.style(new_status.value, fg=status_color)} \u2014 {summary[:120]}")
+
+        total_cost = result.cost_usd
+        total_input = result.input_tokens
+        total_output = result.output_tokens
+        total_cache_read = result.cache_read_input_tokens
+        total_cache_create = result.cache_creation_input_tokens
+
+        if new_status == StoryStatus.implemented and review:
+            review_result = _run_review(
+                state, story,
+                model=model,
+                system_prompt=system_prompt,
+                verbose=verbose,
+                dangerously_skip_permissions=dangerously_skip_permissions,
+                max_budget_usd=max_budget_usd,
+            )
+            if review_result is not None:
+                total_cost += review_result.cost_usd
+                total_input += review_result.input_tokens
+                total_output += review_result.output_tokens
+                total_cache_read += review_result.cache_read_input_tokens
+                total_cache_create += review_result.cache_creation_input_tokens
+                if not review_result.approved:
+                    new_status = StoryStatus.rework
+                    state.mark_story_status(story.id, StoryStatus.rework, summary="Review rejected")
+
+        return IterationResult(
+            iteration=ps.current_iteration, phase="implement", mode="resume",
+            success=True, impl_status=new_status.value,
+            cost_usd=total_cost, story_id=story.id,
+            input_tokens=total_input,
+            output_tokens=total_output,
+            cache_read_input_tokens=total_cache_read,
+            cache_creation_input_tokens=total_cache_create,
+        )
+
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
         if result.impl_status == "all_done":
             ps.completion_reason = "all_stories_done"
@@ -907,7 +1222,7 @@ def run_implement_loop(
             return True
         return False
 
-    return _run_loop("implement", state, max_iterations, cooldown, iteration_fn, completion_fn, verbose)
+    return _run_loop("implement", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
 
 
 @dataclass
