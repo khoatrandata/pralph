@@ -216,7 +216,7 @@ def run_claude(
                     post = _post_takeover_menu(session_id)
                     if post == "resume":
                         return run_claude(
-                            "",
+                            "Continue where you left off.",
                             resume_session_id=session_id,
                             dangerously_skip_permissions=dangerously_skip_permissions,
                             timeout=timeout,
