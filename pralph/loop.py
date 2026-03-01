@@ -110,6 +110,7 @@ def _run_loop(
     completion_fn: Callable[[IterationResult, PhaseState], bool],
     resume_fn: Callable[[str, PhaseState], IterationResult] | None = None,
     verbose: bool = False,
+    dangerously_skip_permissions: bool = False,
 ) -> PhaseState:
     """Generic iteration loop shared by all phases."""
     ps = state.load_phase_state(phase)
@@ -135,7 +136,7 @@ def _run_loop(
                     return ps
                 state.save_phase_state(ps)
             elif choice == "interactive":
-                resume_interactive(ps.active_session_id, str(state.project_dir))
+                resume_interactive(ps.active_session_id, str(state.project_dir), dangerously_skip_permissions)
                 _clear_session_tracking(ps)
                 state.save_phase_state(ps)
             elif choice == "abort":
@@ -323,7 +324,7 @@ def run_plan_loop(
             return True
         return False
 
-    return _run_loop("plan", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
+    return _run_loop("plan", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
 
 
 # ── Phase 2: Stories ──────────────────────────────────────────────────
@@ -453,7 +454,7 @@ def run_stories_loop(
             return True
         return False
 
-    ps = _run_loop("stories", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
+    ps = _run_loop("stories", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
 
     total = len(state.load_stories())
     click.echo(f"\n  Total stories: {total}")
@@ -739,7 +740,7 @@ def run_ideate_loop(
             return True
         return False
 
-    ps = _run_loop("ideate", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
+    ps = _run_loop("ideate", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
 
     total = len(state.load_stories())
     click.echo(f"\n  Total stories: {total}")
@@ -864,7 +865,7 @@ def run_webgen_loop(
             return True
         return False
 
-    ps = _run_loop("webgen", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
+    ps = _run_loop("webgen", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
 
     total = len(state.load_stories())
     click.echo(f"\n  Total stories: {total}")
@@ -1222,7 +1223,7 @@ def run_implement_loop(
             return True
         return False
 
-    return _run_loop("implement", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose)
+    return _run_loop("implement", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
 
 
 @dataclass

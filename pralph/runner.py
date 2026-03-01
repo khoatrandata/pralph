@@ -212,7 +212,7 @@ def run_claude(
                     proc.kill()
                     proc.wait()
                     _click.echo(_click.style("\n  Entering interactive mode...\n", fg="cyan", bold=True))
-                    resume_interactive(session_id, cwd)
+                    resume_interactive(session_id, cwd, dangerously_skip_permissions)
                     post = _post_takeover_menu(session_id)
                     if post == "resume":
                         return run_claude(
@@ -476,9 +476,12 @@ def _post_takeover_menu(session_id: str) -> str:
 def resume_interactive(
     session_id: str,
     project_dir: str | None = None,
+    dangerously_skip_permissions: bool = False,
 ) -> int:
     """Resume a claude session interactively, inheriting the terminal."""
     cmd = ["claude", "--resume", session_id]
+    if dangerously_skip_permissions:
+        cmd.append("--dangerously-skip-permissions")
     return subprocess.call(cmd, cwd=project_dir)
 
 
