@@ -4,7 +4,7 @@
 
 ## Background
 
-pralph is inspired by the official [Ralph](https://github.com/anthropics/ralph) plugin and [RalphX](https://github.com/anthropics/ralphx), which provide AI-driven product development workflows inside Claude Code. Unlike those tools, **pralph runs outside of Claude Code**, driving it as a subprocess. This means:
+pralph is inspired by the official [Ralph](https://github.com/anthropics/claude-code/tree/main/plugins/ralph-wiggum) plugin and [RalphX](https://github.com/jackneil/ralphx), which provide AI-driven product development workflows inside Claude Code. Unlike those tools, **pralph runs outside of Claude Code**, driving it as a subprocess. This means:
 
 - **External orchestration** — pralph launches Claude Code invocations as child processes, managing sessions, streaming output, and coordinating multi-phase workflows from the outside.
 - **Phase state persistence** — All state (design docs, stories, run logs) is tracked in a `.pralph/` directory, surviving across sessions and crashes.
@@ -308,8 +308,8 @@ Templates use `{{variable}}` placeholders that are substituted at runtime (e.g. 
 
 pralph is heavily inspired by:
 
-- **[Ralph](https://github.com/anthropics/ralph)** — Anthropic's official Claude Code plugin for AI-driven product development workflows.
-- **[RalphX](https://github.com/anthropics/ralphx)** — The extended version of Ralph with multi-phase planning, story extraction, and implementation loops.
+- **[Ralph](https://github.com/anthropics/claude-code/tree/main/plugins/ralph-wiggum)** — Anthropic's official Claude Code plugin for AI-driven product development workflows.
+- **[RalphX](https://github.com/jackneil/ralphx)** — The extended version of Ralph with multi-phase planning, story extraction, and implementation loops.
 
 - **[compound-engineering-plugin](https://github.com/EveryInc/compound-engineering-plugin)** — Every Inc's compound learning plugin whose philosophy of documenting solutions to build institutional knowledge inspired pralph's compound learning feature.
 
