@@ -434,6 +434,18 @@ def reset_errors(ctx):
     """Reset error stories to pending and clear error state."""
     state = StateManager(ctx.obj["project_dir"])
 
+    # Show error details before resetting
+    error_stories = [s for s in state.load_stories() if s.status == StoryStatus.error]
+    if error_stories:
+        click.echo(click.style(f"  {len(error_stories)} stories in error state:", fg='red'))
+        for s in error_stories:
+            reason = s.metadata.get("error_reason", "(no reason captured)")
+            error_at = s.metadata.get("error_at", "")
+            click.echo(f"    {click.style(s.id, fg='blue')}: {s.title}")
+            click.echo(f"      Reason: {reason[:200]}")
+            if error_at:
+                click.echo(f"      Error at: {error_at}")
+
     # Reset error stories back to pending
     reset_stories = state.reset_error_stories()
 
@@ -456,9 +468,7 @@ def reset_errors(ctx):
             click.echo(f"  Cleared '{phase}' phase error state")
 
     if reset_stories:
-        click.echo(click.style(f"  Reset {len(reset_stories)} stories from error to pending:", fg='green'))
-        for s in reset_stories:
-            click.echo(f"    {click.style(s.id, fg='blue')}: {s.title}")
+        click.echo(click.style(f"  Reset {len(reset_stories)} stories to pending", fg='green'))
     else:
         click.echo("  No error stories found")
 

@@ -1055,7 +1055,10 @@ def run_implement_loop(
                     cost_usd=result.cost_usd, story_id=story.id,
                     **_token_kwargs(result),
                 )
-            state.mark_story_status(story.id, StoryStatus.error, summary=result.error[:200])
+            state.mark_story_status(
+                story.id, StoryStatus.error, summary=result.error[:200],
+                error_reason=result.error, error_output=result.result or "",
+            )
             return IterationResult(
                 iteration=i, phase="implement", mode="implement",
                 success=False, error=result.error, cost_usd=result.cost_usd,
@@ -1072,7 +1075,11 @@ def run_implement_loop(
         except ValueError:
             new_status = StoryStatus.implemented if status_str == "completed" else StoryStatus.error
 
-        state.mark_story_status(story.id, new_status, summary=summary, extra=parsed)
+        state.mark_story_status(
+            story.id, new_status, summary=summary, extra=parsed,
+            error_reason=parsed.get("reason", "") if new_status == StoryStatus.error else "",
+            error_output=result.result if new_status == StoryStatus.error else "",
+        )
         status_color = 'green' if new_status == StoryStatus.implemented else 'yellow'
         click.echo(f"  → {story.id}: {click.style(new_status.value, fg=status_color)} — {summary[:120]}")
 
@@ -1160,7 +1167,10 @@ def run_implement_loop(
         )
 
         if not result.success:
-            state.mark_story_status(story.id, StoryStatus.error, summary=f"Resume failed: {result.error[:200]}")
+            state.mark_story_status(
+                story.id, StoryStatus.error, summary=f"Resume failed: {result.error[:200]}",
+                error_reason=f"Resume failed: {result.error}", error_output=result.result or "",
+            )
             return IterationResult(
                 iteration=ps.current_iteration, phase="implement", mode="resume",
                 success=False, error=result.error, cost_usd=result.cost_usd,
@@ -1176,7 +1186,11 @@ def run_implement_loop(
         except ValueError:
             new_status = StoryStatus.implemented if status_str == "completed" else StoryStatus.error
 
-        state.mark_story_status(story.id, new_status, summary=summary, extra=parsed)
+        state.mark_story_status(
+            story.id, new_status, summary=summary, extra=parsed,
+            error_reason=parsed.get("reason", "") if new_status == StoryStatus.error else "",
+            error_output=result.result if new_status == StoryStatus.error else "",
+        )
         status_color = 'green' if new_status == StoryStatus.implemented else 'yellow'
         click.echo(f"  \u2192 {story.id}: {click.style(new_status.value, fg=status_color)} \u2014 {summary[:120]}")
 
@@ -1356,7 +1370,10 @@ def _implement_single(
             state.mark_story_status(story.id, StoryStatus.pending, summary=f"User {result.error}")
             reason = "user_aborted" if result.error == "aborted" else "user_interrupted"
             return PhaseState(phase="implement", completed=True, completion_reason=reason)
-        state.mark_story_status(story.id, StoryStatus.error, summary=result.error[:200])
+        state.mark_story_status(
+            story.id, StoryStatus.error, summary=result.error[:200],
+            error_reason=result.error, error_output=result.result or "",
+        )
         click.echo(f"  Error: {result.error[:200]}")
         return PhaseState(phase="implement", completed=True, completion_reason="error")
 

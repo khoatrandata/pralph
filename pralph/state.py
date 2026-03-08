@@ -182,6 +182,9 @@ class StateManager:
         for s in stories:
             if s.status == StoryStatus.error:
                 s.status = StoryStatus.pending
+                s.metadata.pop("error_reason", None)
+                s.metadata.pop("error_output", None)
+                s.metadata.pop("error_at", None)
                 reset.append(s)
 
         if reset:
@@ -272,6 +275,8 @@ class StateManager:
         status: StoryStatus,
         summary: str = "",
         extra: dict | None = None,
+        error_reason: str = "",
+        error_output: str = "",
     ) -> None:
         entry = {
             "story_id": story_id,
@@ -279,6 +284,8 @@ class StateManager:
             "summary": summary,
             **(extra or {}),
         }
+        if error_reason:
+            entry["error_reason"] = error_reason
         with open(self.status_path, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
@@ -287,6 +294,12 @@ class StateManager:
         for s in stories:
             if s.id == story_id:
                 s.status = status
+                if status == StoryStatus.error:
+                    s.metadata["error_reason"] = error_reason or summary
+                    if error_output:
+                        # Keep last 2000 chars of output for context
+                        s.metadata["error_output"] = error_output[-2000:]
+                    s.metadata["error_at"] = datetime.now().isoformat()
                 break
         self._rewrite_stories(stories)
 
