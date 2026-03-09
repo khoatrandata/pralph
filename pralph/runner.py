@@ -557,8 +557,50 @@ def _print_event(event: dict, verbose: bool) -> None:
             first_line = content.split("\n")[0][:200]
             _click.echo(_click.style(f"  📋 {first_line}", dim=True), err=True)
 
-    elif etype in ("system", "rate_limit_event"):
-        pass  # skip noisy system events
+    elif etype == "user":
+        # Tool result coming back from a tool call
+        output = ""
+        tool_result = event.get("tool_use_result")
+        if isinstance(tool_result, dict):
+            stdout = tool_result.get("stdout", "")
+            stderr = tool_result.get("stderr", "")
+            output = stderr if stderr else stdout
+        if not output:
+            # Fallback: extract content from message.content tool_result blocks
+            msg = event.get("message", {})
+            if isinstance(msg, dict):
+                for block in msg.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        c = block.get("content", "")
+                        if isinstance(c, str) and c:
+                            output = c
+                            break
+        if output:
+            if verbose:
+                _click.echo(_click.style(f"  📋 {output}", dim=True), err=True)
+            else:
+                lines = output.strip().split("\n")
+                preview = lines[0]
+                if len(lines) > 1:
+                    preview += _click.style(f" (+{len(lines)-1} lines)", dim=True)
+                _click.echo(_click.style(f"  📋 {preview}", dim=True), err=True)
+
+    elif etype == "rate_limit_event":
+        info = event.get("rate_limit_info", {})
+        status = info.get("status", "unknown")
+        if status != "allowed":
+            limit_type = info.get("rateLimitType", "")
+            resets_at = info.get("resetsAt", "")
+            _click.echo(_click.style(f"  ⚠ rate limited ({limit_type}, resets {resets_at})", fg='yellow'), err=True)
+
+    elif etype == "system":
+        if verbose:
+            subtype = event.get("subtype", "")
+            model = event.get("model", "")
+            cwd = event.get("cwd", "")
+            version = event.get("claude_code_version", "")
+            parts = [s for s in [subtype, model, cwd, version] if s]
+            _click.echo(_click.style(f"  [system] {' | '.join(parts)}", dim=True), err=True)
 
     elif verbose:
         _click.echo(_click.style(f"  [{etype}] {str(event)[:120]}", dim=True), err=True)
