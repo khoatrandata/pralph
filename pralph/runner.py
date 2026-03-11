@@ -196,9 +196,17 @@ def run_claude(
             # Check if interrupted by ESC (process is SIGSTOP'd)
             if monitor_state and monitor_state[0].is_set():
                 _stop_elapsed_timer(timer_stop)
+                tty_file = monitor_state[3]
                 _stop_esc_monitor(monitor_state)
 
-                choice = _handle_interrupt(session_id, cwd)
+                choice = _handle_interrupt(session_id, cwd, tty_file=tty_file)
+
+                # Close /dev/tty if we opened it; a new one is opened if we continue
+                if tty_file is not None:
+                    try:
+                        tty_file.close()
+                    except OSError:
+                        pass
 
                 if choice == "continue":
                     try:
@@ -336,6 +344,11 @@ def run_claude(
     finally:
         _stop_elapsed_timer(timer_stop)
         _stop_esc_monitor(monitor_state)
+        if monitor_state is not None and monitor_state[3] is not None:
+            try:
+                monitor_state[3].close()
+            except OSError:
+                pass
 
     if error_result:
         return error_result
@@ -375,30 +388,43 @@ def run_claude(
 
 def _start_esc_monitor(
     proc: subprocess.Popen,
-) -> tuple[threading.Event, threading.Event, list] | None:
-    """Start monitoring stdin for ESC key. Returns (interrupted, stop, old_settings) or None."""
+) -> tuple[threading.Event, threading.Event, list, "io.BufferedReader | None"] | None:
+    """Start monitoring stdin for ESC key.
+
+    Returns (interrupted, stop, old_settings, tty_file) or None.
+    tty_file is non-None when /dev/tty was opened because stdin is not a TTY.
+    """
     if not _HAS_TERMIOS:
         return None
+
+    tty_file = None
     try:
         stdin_fd = sys.stdin.fileno()
     except (ValueError, AttributeError):
         return None
-    if not os.isatty(stdin_fd):
-        return None
+
+    if os.isatty(stdin_fd):
+        input_fd = stdin_fd
+    else:
+        try:
+            tty_file = open("/dev/tty", "rb", buffering=0)  # noqa: SIM115
+            input_fd = tty_file.fileno()
+        except OSError:
+            return None
 
     interrupted = threading.Event()
     stop = threading.Event()
-    old_settings = termios.tcgetattr(stdin_fd)
-    tty.setcbreak(stdin_fd)
+    old_settings = termios.tcgetattr(input_fd)
+    tty.setcbreak(input_fd)
 
     def monitor() -> None:
         try:
             while not stop.is_set():
-                ready, _, _ = select.select([stdin_fd], [], [], 0.2)
+                ready, _, _ = select.select([input_fd], [], [], 0.2)
                 if stop.is_set():
                     return
                 if ready:
-                    ch = os.read(stdin_fd, 1)
+                    ch = os.read(input_fd, 1)
                     if ch == b"\x1b":
                         interrupted.set()
                         try:
@@ -411,32 +437,47 @@ def _start_esc_monitor(
 
     t = threading.Thread(target=monitor, daemon=True)
     t.start()
-    return interrupted, stop, old_settings
+    return interrupted, stop, old_settings, tty_file
 
 
 def _stop_esc_monitor(
-    monitor_state: tuple[threading.Event, threading.Event, list] | None,
+    monitor_state: tuple[threading.Event, threading.Event, list, "io.BufferedReader | None"] | None,
 ) -> None:
     """Stop ESC monitor and restore terminal settings."""
     if monitor_state is None:
         return
-    _, stop, old_settings = monitor_state
+    _, stop, old_settings, tty_file = monitor_state
     stop.set()
     try:
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+        if tty_file is not None:
+            termios.tcsetattr(tty_file.fileno(), termios.TCSADRAIN, old_settings)
+        else:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
     except (OSError, ValueError):
         pass
 
 
-def _handle_interrupt(session_id: str, project_dir: str | None) -> str:
+def _handle_interrupt(session_id: str, project_dir: str | None, tty_file: "io.BufferedReader | None" = None) -> str:
     """Show interrupt menu and return choice: 'continue', 'takeover', 'skip', or 'abort'."""
     import click
 
     # Flush any stale input from the ESC detection
     try:
-        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        flush_fd = tty_file.fileno() if tty_file is not None else sys.stdin.fileno()
+        termios.tcflush(flush_fd, termios.TCIFLUSH)
     except (OSError, ValueError):
         pass
+
+    # When stdin is piped, redirect stdin to /dev/tty so click.prompt reads
+    # from the terminal instead of the exhausted pipe.
+    restore_stdin = None
+    if not sys.stdin.isatty():
+        try:
+            restore_stdin = sys.stdin
+            sys.stdin = open("/dev/tty", "r")  # noqa: SIM115
+        except OSError:
+            sys.stdin = restore_stdin
+            restore_stdin = None
 
     click.echo()
     click.echo(click.style("  ⏸  Interrupted", fg="yellow", bold=True))
@@ -446,9 +487,14 @@ def _handle_interrupt(session_id: str, project_dir: str | None) -> str:
     click.echo("  [3] Skip      — continue to next iteration")
     click.echo("  [4] Abort     — stop the loop")
     click.echo()
-    choice = click.prompt(
-        "  Choice", type=click.Choice(["1", "2", "3", "4"]), default="1",
-    )
+    try:
+        choice = click.prompt(
+            "  Choice", type=click.Choice(["1", "2", "3", "4"]), default="1",
+        )
+    finally:
+        if restore_stdin is not None:
+            sys.stdin.close()
+            sys.stdin = restore_stdin
 
     if choice == "1":
         return "continue"
