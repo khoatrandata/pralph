@@ -20,10 +20,16 @@ def _read_stdin() -> str | None:
     return None
 
 
-def _resolve_prompt(flag_value: str | None, interactive_label: str) -> str:
-    """Resolve prompt: flag > stdin > interactive prompt."""
+def _resolve_prompt(flag_value: str | None, interactive_label: str, file_value: str | None = None) -> str:
+    """Resolve prompt: flag > file > stdin > interactive prompt."""
     if flag_value:
         return flag_value
+    if file_value:
+        from pathlib import Path
+        p = Path(file_value)
+        if not p.exists():
+            raise click.BadParameter(f"File not found: {file_value}", param_hint="'--prompt-file'")
+        return p.read_text().strip()
     stdin = _read_stdin()
     if stdin:
         return stdin
@@ -109,9 +115,10 @@ def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_
 @main.command()
 @click.option("--name", default=None, help="Project name (required on first run, e.g. 'myapp')")
 @click.option("--prompt", default=None, help="Guidance for design doc creation")
+@click.option("--prompt-file", default=None, type=click.Path(), help="Read prompt from a file")
 @click.option("--reset", is_flag=True, help="Reset phase state and start fresh")
 @click.pass_context
-def plan(ctx, name, prompt, reset):
+def plan(ctx, name, prompt, prompt_file, reset):
     """Phase 1: Create/refine a design document."""
     project_dir = ctx.obj["project_dir"]
     config_path = os.path.join(project_dir, ".pralph", "project.json")
@@ -123,7 +130,7 @@ def plan(ctx, name, prompt, reset):
     state = StateManager(project_dir, project_name=name)
     if reset:
         _reset_phase(state, "plan")
-    prompt = _resolve_prompt(prompt, "Design prompt")
+    prompt = _resolve_prompt(prompt, "Design prompt", file_value=prompt_file)
     click.echo(f"pralph plan — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {state.project_id}")
     click.echo(f"  model: {ctx.obj['model']}")
@@ -384,14 +391,21 @@ def refine(ctx, instruction, prompt, story_ids, id_pattern):
 @click.option("--review/--no-review", default=True, help="Run reviewer after each implementation")
 @click.option("--compound/--no-compound", default=False, help="Capture learnings after each story (compound learning)")
 @click.option("--prompt", default=None, help="Guidance for implementation (e.g. 'use FastAPI', 'use MCP for DB access')")
+@click.option("--prompt-file", default=None, type=click.Path(), help="Read prompt from a file")
 @click.option("--parallel", default=1, type=click.IntRange(min=1), help="Max concurrent stories (default: 1 = sequential)")
 @click.option("--reset", is_flag=True, help="Reset phase state and start fresh")
 @click.pass_context
-def implement(ctx, story_id, phase1, review, compound, prompt, parallel, reset):
+def implement(ctx, story_id, phase1, review, compound, prompt, prompt_file, parallel, reset):
     """Phase 3: Implement stories from backlog."""
     state = _get_state(ctx)
     if reset:
         _reset_phase(state, "implement")
+    if not prompt and prompt_file:
+        from pathlib import Path
+        p = Path(prompt_file)
+        if not p.exists():
+            raise click.BadParameter(f"File not found: {prompt_file}", param_hint="'--prompt-file'")
+        prompt = p.read_text().strip()
     prompt = prompt or _read_stdin() or ""
     click.echo(f"pralph implement — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {state.project_id}")
