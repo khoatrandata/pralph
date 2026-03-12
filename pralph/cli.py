@@ -199,12 +199,13 @@ def webgen(ctx, reset):
 
 @main.command()
 @click.option("--prompt", default=None, help="Brief idea to turn into a story (prompted if omitted)")
+@click.option("--prompt-file", default=None, type=click.Path(), help="Read prompt from a file")
 @click.option("--next", "is_next", is_flag=True, help="Priority 1 — implement next")
 @click.option("--anytime", is_flag=True, default=False, help="Claude picks priority (default)")
 @click.pass_context
-def add(ctx, prompt, is_next, anytime):
+def add(ctx, prompt, prompt_file, is_next, anytime):
     """Add a single story from an idea."""
-    prompt = _resolve_prompt(prompt, "Idea")
+    prompt = _resolve_prompt(prompt, "Idea", file_value=prompt_file)
     state = _get_state(ctx)
     click.echo(f"pralph add")
     click.echo(f"  project: {state.project_id}")
@@ -309,10 +310,11 @@ def ideate(ctx, ideas_args, ideas_file, prompt, reset):
 @main.command()
 @click.argument("instruction", required=False)
 @click.option("--prompt", default=None, help="Refinement instruction")
+@click.option("--prompt-file", default=None, type=click.Path(), help="Read prompt from a file")
 @click.option("--story", "-s", "story_ids", multiple=True, help="Story ID(s) to refine")
 @click.option("--pattern", "-p", "id_pattern", default=None, help="Glob pattern to match story IDs (e.g. 'I18N-*')")
 @click.pass_context
-def refine(ctx, instruction, prompt, story_ids, id_pattern):
+def refine(ctx, instruction, prompt, prompt_file, story_ids, id_pattern):
     """Refine existing stories: split, merge, or rewrite."""
     import fnmatch
 
@@ -347,12 +349,9 @@ def refine(ctx, instruction, prompt, story_ids, id_pattern):
         if s.status not in (StoryStatus.pending, StoryStatus.rework, StoryStatus.error):
             click.echo(click.style(f"  Warning: {s.id} has status '{s.status.value}'", fg='yellow'))
 
-    # Resolve instruction: positional arg > --prompt > stdin > interactive
+    # Resolve instruction: positional arg > --prompt > --prompt-file > stdin > interactive
     if not instruction:
-        if prompt:
-            instruction = prompt
-        else:
-            instruction = _read_stdin() or click.prompt("Refinement instruction")
+        instruction = _resolve_prompt(prompt, "Refinement instruction", file_value=prompt_file)
     if not instruction.strip():
         click.echo(click.style("Error: instruction is empty", fg='red'))
         return
@@ -439,10 +438,11 @@ def implement(ctx, story_id, phase1, review, compound, prompt, prompt_file, para
 @main.command()
 @click.option("--story-id", default=None, help="Story ID to capture learnings from")
 @click.option("--prompt", default=None, help="Description of what was done")
+@click.option("--prompt-file", default=None, type=click.Path(), help="Read prompt from a file")
 @click.pass_context
-def compound(ctx, story_id, prompt):
+def compound(ctx, story_id, prompt, prompt_file):
     """Capture learnings from recent work (compound learning)."""
-    prompt = _resolve_prompt(prompt, "Description of work done")
+    prompt = _resolve_prompt(prompt, "Description of work done", file_value=prompt_file)
     state = _get_state(ctx)
     click.echo(f"pralph compound")
     click.echo(f"  project: {state.project_id}")
