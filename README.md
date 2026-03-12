@@ -35,7 +35,9 @@ pralph is inspired by the official [Ralph](https://github.com/anthropics/claude-
 
 ## How it works
 
-pralph breaks development into phases:
+pralph breaks development into phases. Each phase enforces its prerequisites — running a phase out of order will error with a message pointing you to the required step.
+
+`plan` → `stories` → `webgen` (optional) → `implement`
 
 ### Phase 1: Plan
 
