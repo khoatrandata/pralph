@@ -11,12 +11,8 @@ from pralph.compound import CompoundResult, run_compound_capture
 from pralph.models import IterationResult, PhaseState, Story, StoryStatus
 from pralph.parser import parse_implement_output
 from pralph.review import ReviewResult, run_review
-from pralph.runner import (
-    ClaudeResult,
-    ProcessGroup,
-    handle_parallel_interrupt,
-    run_with_retry_parallel,
-)
+from pralph.runner import ClaudeResult, run_with_retry_parallel
+from pralph.terminal import ProcessGroup, handle_parallel_interrupt
 from pralph.state import StateManager
 
 # Foundation categories to prioritize in implementation

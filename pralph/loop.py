@@ -40,9 +40,9 @@ from pralph.runner import (
     STORIES_TOOLS_EXTRACT,
     STORIES_TOOLS_RESEARCH,
     ClaudeResult,
-    resume_interactive,
     run_with_retry,
 )
+from pralph.terminal import resume_interactive
 from pralph.state import StateManager
 
 
