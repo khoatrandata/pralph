@@ -4,8 +4,6 @@ import json
 import random
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
@@ -13,51 +11,39 @@ import click
 
 from pralph.assembler import (
     assemble_add_prompt,
-    assemble_compound_prompt,
     assemble_ideate_prompt,
     assemble_implement_prompt,
     assemble_phase1_analyze_prompt,
     assemble_plan_prompt,
     assemble_refine_prompt,
-    assemble_review_prompt,
     assemble_stories_prompt,
     build_guardrails_system_prompt,
 )
+from pralph.compound import run_compound_capture
 from pralph.models import IterationResult, PhaseState, Story, StoryStatus
+from pralph.parallel import FOUNDATION_CATEGORIES, sort_stories, run_parallel_implement
 from pralph.parser import (
     detect_completion_signal,
     detect_ideation_complete,
     extract_json_from_text,
-    parse_compound_output,
     parse_implement_output,
     parse_plan_output,
-    parse_review_output,
     parse_stories_output,
 )
+from pralph.review import run_review
 from pralph.runner import (
     ADD_TOOLS,
-    COMPOUND_TOOLS,
     IDEATE_TOOLS,
     IMPLEMENT_TOOLS,
     PLAN_TOOLS,
     REFINE_TOOLS,
-    REVIEW_TOOLS,
     STORIES_TOOLS_EXTRACT,
     STORIES_TOOLS_RESEARCH,
     ClaudeResult,
     resume_interactive,
-    ProcessGroup,
-    handle_parallel_interrupt,
     run_with_retry,
-    run_with_retry_parallel,
 )
 from pralph.state import StateManager
-
-# Foundation categories to prioritize in implementation
-FOUNDATION_CATEGORIES = frozenset({
-    "FND", "DBM", "SEC", "ARC", "ADM", "DAT", "DEP", "SYS", "INF",
-    "INFRA", "ARCH", "DB", "AUTH", "SETUP", "FOUNDATION",
-})
 
 
 def _token_kwargs(cr: ClaudeResult) -> dict:
@@ -929,7 +915,7 @@ def run_implement_loop(
 
     # Parallel mode: run up to N stories concurrently
     if parallel > 1:
-        return _run_parallel_implement(
+        return run_parallel_implement(
             state,
             parallel=parallel,
             model=model,
@@ -972,8 +958,8 @@ def run_implement_loop(
             ordered_ids = [sid for sid in impl_order if sid in pending_ids]
             ordered = [s for sid in ordered_ids for s in pending if s.id == sid]
             remaining = [s for s in pending if s.id not in set(ordered_ids)]
-            return rework + ordered + _sort_stories(remaining)
-        return rework + _sort_stories(pending)
+            return rework + ordered + sort_stories(remaining)
+        return rework + sort_stories(pending)
 
     def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
         nonlocal story_queue
@@ -1117,7 +1103,7 @@ def run_implement_loop(
 
         # Review step: run on fresh Claude instance after successful implementation
         if new_status == StoryStatus.implemented and review:
-            review_result = _run_review(
+            review_result = run_review(
                 state, story,
                 model=model,
                 system_prompt=system_prompt,
@@ -1138,7 +1124,7 @@ def run_implement_loop(
 
         # Compound learning: capture solutions after successful implementation
         if new_status == StoryStatus.implemented and compound:
-            compound_result = _run_compound_capture(
+            compound_result = run_compound_capture(
                 state, story,
                 model=model,
                 system_prompt=system_prompt,
@@ -1227,7 +1213,7 @@ def run_implement_loop(
         total_cache_create = result.cache_creation_input_tokens
 
         if new_status == StoryStatus.implemented and review:
-            review_result = _run_review(
+            review_result = run_review(
                 state, story,
                 model=model,
                 system_prompt=system_prompt,
@@ -1266,85 +1252,6 @@ def run_implement_loop(
         return False
 
     return _run_loop("implement", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
-
-
-@dataclass
-class _ReviewResult:
-    approved: bool
-    feedback: str
-    issues: list
-    cost_usd: float
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-def _run_review(
-    state: StateManager,
-    story: Story,
-    *,
-    model: str,
-    system_prompt: str,
-    verbose: bool,
-    dangerously_skip_permissions: bool,
-    max_budget_usd: float | None,
-) -> _ReviewResult | None:
-    """Run a review on a freshly implemented story. Returns None on review error."""
-    click.echo(click.style(f"  🔍 Reviewing: {story.id}", fg='magenta', bold=True))
-
-    review_prompt = assemble_review_prompt(state, story)
-    result = run_with_retry(
-        review_prompt,
-        model=model,
-        allowed_tools=REVIEW_TOOLS,
-        system_prompt=system_prompt,
-        dangerously_skip_permissions=dangerously_skip_permissions,
-        max_budget_usd=max_budget_usd,
-        timeout=600,
-        verbose=verbose,
-        project_dir=str(state.project_dir),
-    )
-
-    if not result.success:
-        click.echo(click.style(f"  ⚠ Review failed (error): {result.error[:120]}", fg='yellow'))
-        click.echo(click.style("  → Auto-approving due to review error", fg='yellow'))
-        return None
-
-    parsed = parse_review_output(result.result)
-    approved = parsed["approved"]
-    feedback = parsed["feedback"]
-    issues = parsed.get("issues", [])
-
-    if approved:
-        state.clear_review_feedback(story.id)
-        click.echo(click.style(f"  ✓ Review approved", fg='green', bold=True) + f" — {feedback[:120]}")
-    else:
-        # Build feedback text for the rework file
-        feedback_lines = [f"# Review Feedback for {story.id}\n", f"**Summary:** {feedback}\n"]
-        for issue in issues:
-            sev = issue.get("severity", "?")
-            desc = issue.get("description", "")
-            feedback_lines.append(f"- **[{sev}]** {desc}")
-        feedback_text = "\n".join(feedback_lines)
-        state.write_review_feedback(story.id, feedback_text)
-        click.echo(click.style(f"  ✗ Review rejected", fg='red', bold=True) + f" — {feedback[:120]}")
-        for issue in issues:
-            sev = issue.get("severity", "?")
-            desc = issue.get("description", "")
-            color = 'red' if sev in ("critical", "major") else 'yellow'
-            click.echo(f"    {click.style(f'[{sev}]', fg=color)} {desc[:100]}")
-
-    return _ReviewResult(
-        approved=approved,
-        feedback=feedback,
-        issues=issues,
-        cost_usd=result.cost_usd,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cache_read_input_tokens=result.cache_read_input_tokens,
-        cache_creation_input_tokens=result.cache_creation_input_tokens,
-    )
 
 
 def _implement_single(
@@ -1416,7 +1323,7 @@ def _implement_single(
 
     # Review step for single story implementation
     if new_status == StoryStatus.implemented and review:
-        review_result = _run_review(
+        review_result = run_review(
             state, story,
             model=model,
             system_prompt=system_prompt,
@@ -1430,7 +1337,7 @@ def _implement_single(
 
     # Compound learning: capture solutions after successful implementation
     if new_status == StoryStatus.implemented and compound:
-        _run_compound_capture(
+        run_compound_capture(
             state, story,
             model=model,
             system_prompt=system_prompt,
@@ -1441,525 +1348,3 @@ def _implement_single(
 
     return PhaseState(phase="implement", completed=True, completion_reason="single_story_done")
 
-
-def _slugify(text: str) -> str:
-    """Generate a filename-safe slug from text."""
-    import re as _re
-    slug = text.lower().strip()
-    slug = _re.sub(r"[^\w\s-]", "", slug)
-    slug = _re.sub(r"[\s_]+", "-", slug)
-    slug = _re.sub(r"-+", "-", slug)
-    return slug[:80].strip("-")
-
-
-@dataclass
-class _CompoundResult:
-    cost_usd: float
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-def _run_compound_capture(
-    state: StateManager,
-    story: Story,
-    *,
-    model: str,
-    system_prompt: str,
-    verbose: bool,
-    dangerously_skip_permissions: bool,
-    max_budget_usd: float | None,
-) -> _CompoundResult:
-    """Run compound learning capture after a successful implementation. Returns result with cost and tokens."""
-    click.echo(click.style(f"  Capturing learnings: {story.id}", fg='magenta', bold=True))
-
-    prompt = assemble_compound_prompt(state, story)
-    result = run_with_retry(
-        prompt,
-        model=model,
-        allowed_tools=COMPOUND_TOOLS,
-        system_prompt=system_prompt,
-        dangerously_skip_permissions=dangerously_skip_permissions,
-        max_budget_usd=max_budget_usd,
-        timeout=300,
-        verbose=verbose,
-        project_dir=str(state.project_dir),
-    )
-
-    if not result.success:
-        click.echo(click.style(f"  Compound capture failed: {result.error[:120]}", fg='yellow'))
-        return _CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
-
-    parsed = parse_compound_output(result.result)
-
-    if not parsed["captured"]:
-        click.echo(click.style(f"  Nothing notable: {parsed['reason'][:120]}", fg='yellow'))
-        return _CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
-
-    solutions = parsed.get("solutions", [])
-    for sol in solutions:
-        title = sol.get("title", "Untitled")
-        category = sol.get("category", "logic-errors")
-        tags = sol.get("tags", [])
-        error_sig = sol.get("error_signature", "")
-        content = sol.get("content", "")
-
-        if not content:
-            # Build content from fields if not provided as full doc
-            parts = [f"# {title}\n"]
-            if sol.get("problem"):
-                parts.append(f"## Problem\n\n{sol['problem']}\n")
-            if error_sig:
-                parts.append(f"## Error Signature\n\n`{error_sig}`\n")
-            if sol.get("solution"):
-                parts.append(f"## Solution\n\n{sol['solution']}\n")
-            if sol.get("prevention"):
-                parts.append(f"## Prevention\n\n{sol['prevention']}\n")
-            if sol.get("related_files"):
-                files = "\n".join(f"- {f}" for f in sol["related_files"])
-                parts.append(f"## Related Files\n\n{files}\n")
-            content = "\n".join(parts)
-
-        filename_slug = _slugify(title) + ".md"
-        index_entry = {
-            "filename": f"{category}/{filename_slug}",
-            "category": category,
-            "title": title,
-            "tags": tags,
-            "story_id": story.id,
-            "created": datetime.now().isoformat(),
-            "error_signature": error_sig,
-        }
-
-        path = state.save_solution(category, filename_slug, content, index_entry)
-        click.echo(click.style(f"  + {title}", fg='green') + f" → {path}")
-
-    click.echo(click.style(f"  Captured {len(solutions)} solution(s)", fg='green', bold=True))
-    return _CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
-
-
-def run_compound(
-    state: StateManager,
-    *,
-    story_id: str | None = None,
-    description: str = "",
-    model: str = "sonnet",
-    verbose: bool = False,
-    dangerously_skip_permissions: bool = False,
-    max_budget_usd: float | None = None,
-) -> float:
-    """Standalone compound capture. Returns cost."""
-    from pralph.assembler import build_guardrails_system_prompt
-
-    system_prompt = build_guardrails_system_prompt("implement", state)
-
-    if story_id:
-        stories = state.load_stories()
-        story = next((s for s in stories if s.id == story_id), None)
-        if not story:
-            click.echo(f"Error: Story '{story_id}' not found")
-            return 0.0
-    else:
-        # Create a synthetic story for ad-hoc capture
-        story = Story(
-            id="COMPOUND",
-            title=description or "Ad-hoc compound capture",
-            content=description,
-        )
-
-    cr = _run_compound_capture(
-        state, story,
-        model=model,
-        system_prompt=system_prompt,
-        verbose=verbose,
-        dangerously_skip_permissions=dangerously_skip_permissions,
-        max_budget_usd=max_budget_usd,
-    )
-    return cr.cost_usd
-
-
-def _sort_stories(stories: list[Story]) -> list[Story]:
-    """Sort stories: foundation categories first → priority → dependency order."""
-
-    def sort_key(s: Story) -> tuple[int, int, str]:
-        is_foundation = 0 if s.category.upper() in FOUNDATION_CATEGORIES else 1
-        return (is_foundation, s.priority, s.id)
-
-    sorted_stories = sorted(stories, key=sort_key)
-
-    # Simple topological adjustment: if A depends on B, B comes first
-    id_to_idx = {s.id: i for i, s in enumerate(sorted_stories)}
-    result: list[Story] = []
-    visited: set[str] = set()
-
-    def visit(story: Story) -> None:
-        if story.id in visited:
-            return
-        visited.add(story.id)
-        for dep_id in story.dependencies:
-            if dep_id in id_to_idx and dep_id not in visited:
-                dep_story = sorted_stories[id_to_idx[dep_id]]
-                visit(dep_story)
-        result.append(story)
-
-    for s in sorted_stories:
-        visit(s)
-
-    return result
-
-
-# ── Parallel implementation ──────────────────────────────────────────
-
-
-_DONE_STATUSES = frozenset({
-    StoryStatus.implemented, StoryStatus.skipped,
-    StoryStatus.duplicate, StoryStatus.external,
-    StoryStatus.error,
-})
-
-
-def _get_ready_stories(
-    state: StateManager,
-    in_flight: set[str],
-    max_count: int,
-) -> list[Story]:
-    """Return stories whose dependencies are all resolved, up to max_count.
-
-    A story is ready if:
-    - It is pending or rework
-    - All its dependencies are resolved (implemented, skipped, or errored)
-    - It is not already in-flight
-
-    Note: errored dependencies count as resolved so dependents are not blocked
-    forever. The dependent story's claude session will see the error status and
-    can decide how to proceed.
-    """
-    all_stories = state.load_stories()
-    done_ids = {s.id for s in all_stories if s.status in _DONE_STATUSES}
-    actionable = [
-        s for s in all_stories
-        if s.status in (StoryStatus.pending, StoryStatus.rework) and s.id not in in_flight
-    ]
-
-    # Rework stories first
-    rework = [s for s in actionable if s.status == StoryStatus.rework]
-    pending = [s for s in actionable if s.status == StoryStatus.pending]
-    candidates = rework + _sort_stories(pending)
-
-    ready: list[Story] = []
-    for s in candidates:
-        if len(ready) >= max_count:
-            break
-        deps_met = all(dep_id in done_ids for dep_id in s.dependencies)
-        if deps_met:
-            ready.append(s)
-
-    return ready
-
-
-def _run_parallel_implement(
-    state: StateManager,
-    *,
-    parallel: int,
-    model: str,
-    system_prompt: str,
-    tools: str,
-    user_prompt: str,
-    phase1: bool,
-    review: bool,
-    compound: bool,
-    cooldown: int,
-    verbose: bool,
-    dangerously_skip_permissions: bool,
-    max_budget_usd: float | None,
-) -> PhaseState:
-    """Run parallel implementation: up to N stories concurrently with dependency ordering."""
-    if phase1:
-        click.echo(click.style("  Note: --phase1 analysis is skipped in parallel mode", fg='yellow'))
-
-    ps = state.load_phase_state("implement")
-
-    # Resume logic (same as _run_loop)
-    DONE_REASONS = {"all_stories_done", "single_story_done"}
-    if ps.completed:
-        if ps.completion_reason in DONE_REASONS:
-            click.echo(f"  Phase 'implement' already completed: {ps.completion_reason}")
-            return ps
-        else:
-            click.echo(f"  Phase 'implement' resuming (previously: {ps.completion_reason})...")
-            ps.completed = False
-            ps.consecutive_errors = 0
-            ps.completion_reason = ""
-
-    process_group = ProcessGroup()
-    process_group.start_monitor()
-
-    in_flight: set[str] = set()
-    total_cost = 0.0
-    aborted = False
-
-    def _implement_one_story(story: Story) -> tuple[Story, ClaudeResult, dict]:
-        """Worker function: implement a single story. Returns (story, claude_result, parsed)."""
-        prompt = assemble_implement_prompt(state, story, phase_state=ps, user_prompt=user_prompt)
-        result = run_with_retry_parallel(
-            prompt,
-            story_id=story.id,
-            process_group=process_group,
-            model=model,
-            allowed_tools=tools,
-            system_prompt=system_prompt,
-            dangerously_skip_permissions=dangerously_skip_permissions,
-            max_budget_usd=max_budget_usd,
-            timeout=1800,
-            verbose=verbose,
-            project_dir=str(state.project_dir),
-        )
-        parsed = {}
-        if result.success:
-            parsed = parse_implement_output(result.result)
-        return story, result, parsed
-
-    try:
-        with ThreadPoolExecutor(max_workers=parallel) as pool:
-            futures = {}
-
-            while True:
-                # Check for ESC interrupt at the group level
-                if process_group.is_interrupted:
-                    process_group.stop_monitor()
-                    choice = handle_parallel_interrupt()
-
-                    if choice == "continue":
-                        process_group.resume_all()
-                        process_group.start_monitor()
-                    else:  # abort
-                        process_group.kill_all()
-                        aborted = True
-                        # Wait for workers to finish (subprocesses are dead,
-                        # so workers will return promptly). This prevents the
-                        # ThreadPoolExecutor context manager from blocking on
-                        # shutdown and avoids swallowed exceptions.
-                        for fut in list(futures):
-                            try:
-                                fut.result(timeout=10)
-                            except Exception:
-                                pass
-                        futures.clear()
-                        # Reset in-flight stories to pending
-                        for sid in in_flight:
-                            state.mark_story_status(sid, StoryStatus.pending, summary="User aborted (parallel)")
-                        in_flight.clear()
-                        break
-
-                # Find ready stories to fill worker slots
-                slots = parallel - len(futures)
-                if slots > 0:
-                    ready = _get_ready_stories(state, in_flight, slots)
-                    for story in ready:
-                        state.mark_story_status(story.id, StoryStatus.in_progress)
-                        in_flight.add(story.id)
-                        click.echo(click.style(f"  \u25b6 Starting: {story.id}", fg='yellow', bold=True) + f" \u2014 {story.title}")
-                        state.log_iteration(IterationResult(
-                            iteration=ps.current_iteration + 1, phase="implement", mode="implement_started",
-                            success=True, story_id=story.id,
-                        ))
-                        fut = pool.submit(_implement_one_story, story)
-                        futures[fut] = story.id
-
-                # If nothing running and nothing ready, check if we're done or deadlocked
-                if not futures:
-                    remaining = _get_ready_stories(state, in_flight, 1)
-                    if not remaining:
-                        # Check if there are any stories still pending (but blocked)
-                        all_stories = state.load_stories()
-                        still_pending = [
-                            s for s in all_stories
-                            if s.status in (StoryStatus.pending, StoryStatus.rework)
-                        ]
-                        if still_pending:
-                            status_by_id = {s.id: s.status for s in all_stories}
-                            click.echo(click.style(
-                                f"  \u26a0 Deadlock: {len(still_pending)} stories remaining but none are ready",
-                                fg='red', bold=True,
-                            ))
-                            for s in still_pending[:5]:
-                                dep_details = []
-                                for dep_id in s.dependencies:
-                                    dep_status = status_by_id.get(dep_id)
-                                    if dep_status is None:
-                                        dep_details.append(f"{dep_id}(missing)")
-                                    elif dep_status == StoryStatus.in_progress:
-                                        dep_details.append(f"{dep_id}(in_progress)")
-                                    elif dep_status in (StoryStatus.pending, StoryStatus.rework):
-                                        dep_details.append(f"{dep_id}(pending)")
-                                    else:
-                                        dep_details.append(dep_id)
-                                click.echo(f"    {s.id}: deps=[{', '.join(dep_details) or 'none'}]")
-                            ps.completed = True
-                            ps.completion_reason = "dependency_deadlock"
-                        else:
-                            ps.completed = True
-                            ps.completion_reason = "all_stories_done"
-                        break
-
-                # Wait for at least one completion
-                done_futures = []
-                while not done_futures:
-                    if process_group.is_interrupted:
-                        break
-                    for fut in list(futures):
-                        if fut.done():
-                            done_futures.append(fut)
-                    if not done_futures:
-                        time.sleep(0.3)
-
-                if process_group.is_interrupted:
-                    continue  # Re-enter loop to handle interrupt
-
-                # Process completed futures
-                for fut in done_futures:
-                    story_id = futures.pop(fut)
-                    in_flight.discard(story_id)
-                    ps.current_iteration += 1
-
-                    try:
-                        story, result, parsed = fut.result()
-                    except Exception as e:
-                        state.mark_story_status(story_id, StoryStatus.error, summary=str(e)[:200])
-                        ps.consecutive_errors += 1
-                        click.echo(click.style(f"  \u2717 {story_id}: error", fg='red', bold=True) + f" \u2014 {str(e)[:120]}")
-                        state.log_iteration(IterationResult(
-                            iteration=ps.current_iteration, phase="implement", mode="implement",
-                            success=False, error=str(e)[:200], story_id=story_id,
-                        ))
-                        continue
-
-                    total_cost += result.cost_usd
-
-                    if not result.success:
-                        if result.error in ("interrupted", "aborted"):
-                            state.mark_story_status(story_id, StoryStatus.pending, summary=f"User {result.error}")
-                        else:
-                            state.mark_story_status(story_id, StoryStatus.error, summary=result.error[:200])
-                            ps.consecutive_errors += 1
-                        click.echo(click.style(f"  \u2717 {story_id}: {result.error[:80]}", fg='red'))
-                        state.log_iteration(IterationResult(
-                            iteration=ps.current_iteration, phase="implement", mode="implement",
-                            success=False, error=result.error, cost_usd=result.cost_usd,
-                            story_id=story_id, **_token_kwargs(result),
-                        ))
-                        continue
-
-                    # Success path
-                    ps.consecutive_errors = 0
-                    status_str = parsed.get("status", "error")
-                    summary = parsed.get("summary", "")
-                    try:
-                        new_status = StoryStatus(status_str)
-                    except ValueError:
-                        new_status = StoryStatus.implemented if status_str == "completed" else StoryStatus.error
-
-                    state.mark_story_status(story_id, new_status, summary=summary, extra=parsed)
-                    status_color = 'green' if new_status == StoryStatus.implemented else 'yellow'
-                    click.echo(f"  \u2713 {story_id}: {click.style(new_status.value, fg=status_color)} \u2014 {summary[:120]}")
-
-                    iter_cost = result.cost_usd
-                    iter_input = result.input_tokens
-                    iter_output = result.output_tokens
-                    iter_cache_read = result.cache_read_input_tokens
-                    iter_cache_create = result.cache_creation_input_tokens
-
-                    # Review and compound steps use run_with_retry (sequential)
-                    # which creates its own ESC monitor. Stop the group monitor
-                    # to avoid two monitors competing for stdin.
-                    needs_sequential = (
-                        (new_status == StoryStatus.implemented and review)
-                        or (new_status == StoryStatus.implemented and compound)
-                    )
-                    if needs_sequential:
-                        process_group.stop_monitor()
-
-                    # Review step
-                    if new_status == StoryStatus.implemented and review:
-                        review_result = _run_review(
-                            state, story,
-                            model=model,
-                            system_prompt=system_prompt,
-                            verbose=verbose,
-                            dangerously_skip_permissions=dangerously_skip_permissions,
-                            max_budget_usd=max_budget_usd,
-                        )
-                        if review_result is not None:
-                            iter_cost += review_result.cost_usd
-                            iter_input += review_result.input_tokens
-                            iter_output += review_result.output_tokens
-                            iter_cache_read += review_result.cache_read_input_tokens
-                            iter_cache_create += review_result.cache_creation_input_tokens
-                            if not review_result.approved:
-                                new_status = StoryStatus.rework
-                                state.mark_story_status(story_id, StoryStatus.rework, summary="Review rejected")
-
-                    # Compound learning
-                    if new_status == StoryStatus.implemented and compound:
-                        compound_result = _run_compound_capture(
-                            state, story,
-                            model=model,
-                            system_prompt=system_prompt,
-                            verbose=verbose,
-                            dangerously_skip_permissions=dangerously_skip_permissions,
-                            max_budget_usd=max_budget_usd,
-                        )
-                        iter_cost += compound_result.cost_usd
-                        iter_input += compound_result.input_tokens
-                        iter_output += compound_result.output_tokens
-                        iter_cache_read += compound_result.cache_read_input_tokens
-                        iter_cache_create += compound_result.cache_creation_input_tokens
-
-                    if needs_sequential:
-                        process_group.start_monitor()
-
-                    state.log_iteration(IterationResult(
-                        iteration=ps.current_iteration, phase="implement", mode="implement",
-                        success=True, impl_status=new_status.value,
-                        cost_usd=iter_cost, story_id=story_id,
-                        input_tokens=iter_input, output_tokens=iter_output,
-                        cache_read_input_tokens=iter_cache_read,
-                        cache_creation_input_tokens=iter_cache_create,
-                    ))
-                    ps.total_cost_usd += iter_cost
-
-                    if ps.consecutive_errors >= 5:
-                        ps.completed = True
-                        ps.completion_reason = "consecutive_errors"
-                        # Kill remaining and drain futures
-                        process_group.kill_all()
-                        for f in list(futures):
-                            try:
-                                f.result(timeout=10)
-                            except Exception:
-                                pass
-                        futures.clear()
-                        for sid in in_flight:
-                            state.mark_story_status(sid, StoryStatus.pending, summary="Stopped due to consecutive errors")
-                        in_flight.clear()
-                        break
-
-                if ps.completed:
-                    break
-
-                time.sleep(cooldown)
-
-    finally:
-        process_group.stop_monitor()
-
-    if aborted:
-        ps.completed = True
-        ps.completion_reason = "user_aborted"
-
-    state.save_phase_state(ps)
-    status_msg = ps.completion_reason or "in_progress"
-    color = 'green' if ps.completion_reason == "all_stories_done" else 'yellow'
-    click.echo(click.style(f"\n  Phase 'implement' (parallel={parallel}): {status_msg}", fg=color))
-    click.echo(f"  Total cost: ${ps.total_cost_usd:.4f}")
-    return ps

@@ -7,7 +7,8 @@ from pathlib import Path
 import click
 
 from pralph import __version__
-from pralph.loop import run_add, run_compound, run_ideate_loop, run_implement_loop, run_plan_loop, run_refine, run_stories_loop, run_webgen_loop
+from pralph.compound import run_compound
+from pralph.loop import run_add, run_ideate_loop, run_implement_loop, run_plan_loop, run_refine, run_stories_loop, run_webgen_loop
 from pralph.viewer import run_viewer
 from pralph.models import PhaseState, Story, StoryStatus
 from pralph.state import ProjectNotInitializedError, StateManager
