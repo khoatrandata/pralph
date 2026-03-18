@@ -9,7 +9,6 @@ from pathlib import Path
 
 from urllib.parse import unquote
 
-from pralph import db
 from pralph.models import StoryStatus
 from pralph.report import gather_report_data
 from pralph.state import StateManager
@@ -82,29 +81,28 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_report(self):
-        data = gather_report_data(self.state.project_id)
+        data = gather_report_data(self.state)
         self._json_response(data)
 
     def _serve_phases(self):
-        conn = self.state._conn
-        result = conn.execute(
-            "SELECT * FROM phase_state WHERE project_id = ? ORDER BY phase",
-            [self.state.project_id],
-        )
-        cols = [d[0] for d in result.description]
-        rows = [dict(zip(cols, r)) for r in result.fetchall()]
+        rows = self.state.load_all_phase_states()
         self._json_response(rows)
 
     def _serve_projects(self):
-        conn = db.get_readonly_connection()
         try:
-            result = conn.execute(
-                "SELECT project_id, name, created_at FROM projects ORDER BY created_at DESC"
-            )
-            cols = [d[0] for d in result.description]
-            rows = [dict(zip(cols, r)) for r in result.fetchall()]
-        finally:
-            conn.close()
+            from pralph import db
+            conn = db.get_readonly_connection()
+            try:
+                result = conn.execute(
+                    "SELECT project_id, name, created_at FROM projects ORDER BY created_at DESC"
+                )
+                cols = [d[0] for d in result.description]
+                rows = [dict(zip(cols, r)) for r in result.fetchall()]
+            finally:
+                conn.close()
+        except Exception:
+            # DuckDB not available or no data — return just the current project
+            rows = [{"project_id": self.state.project_id, "name": self.state.project_id, "created_at": ""}]
         self._json_response(rows)
 
     def _serve_solutions(self):
@@ -125,18 +123,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_run_log(self):
-        conn = self.state._conn
-        result = conn.execute(
-            """SELECT iteration, phase, mode, success, stories_generated,
-                      impl_status, error, ROUND(duration, 1) as duration,
-                      ROUND(cost_usd, 4) as cost_usd, story_id,
-                      input_tokens, output_tokens, logged_at
-               FROM run_log WHERE project_id = ?
-               ORDER BY logged_at DESC LIMIT 50""",
-            [self.state.project_id],
-        )
-        cols = [d[0] for d in result.description]
-        rows = [dict(zip(cols, r)) for r in result.fetchall()]
+        entries = self.state.load_run_log()
+        # Round values and take last 50 (newest first)
+        for e in entries:
+            if "duration" in e:
+                e["duration"] = round(e["duration"], 1)
+            if "cost_usd" in e:
+                e["cost_usd"] = round(e["cost_usd"], 4)
+        rows = list(reversed(entries[-50:]))
         self._json_response(rows)
 
     def _serve_settings(self):

@@ -430,6 +430,16 @@ class DbStateMixin:
                 ],
             )
 
+    def load_all_phase_states(self) -> list[dict]:
+        """Load all phase states for this project, returning list of dicts."""
+        with self._hold_conn():  # type: ignore[attr-defined]
+            result = self._conn.execute(  # type: ignore[attr-defined]
+                "SELECT * FROM phase_state WHERE project_id = ? ORDER BY phase",
+                [self.project_id],  # type: ignore[attr-defined]
+            )
+            cols = [desc[0] for desc in result.description]
+            return [dict(zip(cols, r)) for r in result.fetchall()]
+
     # -- run log (DuckDB) --
 
     def log_iteration(self, result: IterationResult) -> None:
@@ -459,6 +469,21 @@ class DbStateMixin:
                     result.cache_creation_input_tokens,
                 ],
             )
+
+    def load_run_log(self) -> list[dict]:
+        """Load all run log entries for this project."""
+        with self._hold_conn():  # type: ignore[attr-defined]
+            result = self._conn.execute(  # type: ignore[attr-defined]
+                """SELECT iteration, phase, mode, success, stories_generated,
+                          impl_status, error, duration, cost_usd, story_id,
+                          input_tokens, output_tokens, cache_read_input_tokens,
+                          cache_creation_input_tokens, logged_at
+                   FROM run_log WHERE project_id = ?
+                   ORDER BY logged_at""",
+                [self.project_id],  # type: ignore[attr-defined]
+            )
+            cols = [desc[0] for desc in result.description]
+            return [dict(zip(cols, r)) for r in result.fetchall()]
 
     def get_story_tokens(self) -> dict[str, dict[str, int]]:
         """Aggregate tokens per story from run_log."""

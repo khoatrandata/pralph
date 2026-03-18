@@ -12,9 +12,9 @@ from pralph.loop import run_add, run_ideate_loop, run_implement_loop, run_plan_l
 from pralph.viewer import run_viewer
 from pralph.models import PhaseState, Story, StoryStatus
 from pralph.state import ProjectNotInitializedError, StateManager
-from pralph import db
 from pralph.report import (
-    BUILTIN_QUERIES, gather_report_data, read_project_id,
+    BUILTIN_QUERIES, gather_report_data, read_project_id, read_storage_backend,
+    run_builtin_query,
     format_cost, format_csv, format_duration, format_json, format_table,
     print_report, build_report_json,
 )
@@ -755,10 +755,10 @@ def viewer(ctx, port, no_open):
 @click.option("--format", "fmt", type=click.Choice(["table", "csv", "json"]), default="table", help="Output format")
 @click.pass_context
 def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, timeline, projects, report, watch, all_projects, fmt):
-    """Query project data stored in DuckDB.
+    """Query project data.
 
     Run built-in queries with flags (--progress, --cost, --stories, etc.)
-    or pass arbitrary SQL as an argument.
+    or pass arbitrary SQL as an argument (DuckDB backend only).
 
     \b
     Examples:
@@ -771,17 +771,26 @@ def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, ti
     """
     import time
 
-    # Handle --report mode (read-only — safe while pralph is running)
+    def _output(columns: list[str], rows: list[tuple]) -> None:
+        if fmt == "table":
+            click.echo(format_table(columns, rows))
+        elif fmt == "csv":
+            click.echo(format_csv(columns, rows))
+        else:
+            click.echo(format_json(columns, rows))
+
+    # Handle --report mode — works with both backends
     if report:
         try:
-            project_id = read_project_id(ctx.obj["project_dir"])
-        except (FileNotFoundError, ValueError) as e:
+            state = StateManager(ctx.obj["project_dir"], readonly=True)
+        except ProjectNotInitializedError as e:
             click.echo(click.style(str(e), fg="red"))
             return
 
         try:
             while True:
-                data = gather_report_data(project_id)
+                state.refresh_readonly()
+                data = gather_report_data(state)
                 if watch:
                     click.echo("\033[2J\033[H", nl=False)
                 if fmt == "json":
@@ -809,46 +818,46 @@ def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, ti
     selected = [name for name, flag in builtin_flags.items() if flag]
 
     if not selected and not sql:
-        # Default: show progress
         selected = ["progress"]
 
-    # Only resolve project_id if we need it (project-scoped queries)
-    needs_project = any(name != "projects" for name in selected)
-    project_id = ""
-    if needs_project:
+    # Run built-in queries via StateManager (works with both backends)
+    if selected:
         try:
-            project_id = read_project_id(ctx.obj["project_dir"])
-        except (FileNotFoundError, ValueError) as e:
+            state = StateManager(ctx.obj["project_dir"], readonly=True)
+        except ProjectNotInitializedError as e:
             click.echo(click.style(str(e), fg="red"))
             return
 
-    def _output(columns: list[str], rows: list[tuple]) -> None:
-        if fmt == "table":
-            click.echo(format_table(columns, rows))
-        elif fmt == "csv":
-            click.echo(format_csv(columns, rows))
-        else:
-            click.echo(format_json(columns, rows))
+        for name in selected:
+            label = BUILTIN_QUERIES[name][0]
+            click.echo(click.style(f"\n  {label}", bold=True))
+            click.echo()
+            columns, rows = run_builtin_query(name, state)
+            _output(columns, rows)
 
-    # Run built-in queries
-    for name in selected:
-        label, builtin_sql = BUILTIN_QUERIES[name]
-        click.echo(click.style(f"\n  {label}", bold=True))
-        click.echo()
-        if name == "projects":
-            columns, rows = db.execute_query(builtin_sql)
-        else:
-            columns, rows = db.execute_query(builtin_sql, [project_id])
-        _output(columns, rows)
-
-    # Run custom SQL
+    # Run custom SQL (DuckDB only)
     if sql:
+        backend = read_storage_backend(ctx.obj["project_dir"])
+        if backend != "duckdb":
+            click.echo(click.style(
+                "Custom SQL requires the DuckDB backend.\n"
+                "Set \"storage\": \"duckdb\" in .pralph/project.json to enable SQL queries.",
+                fg="yellow",
+            ))
+            return
+
+        from pralph import db
         click.echo()
         try:
             columns, rows = db.execute_query(sql)
             _output(columns, rows)
         except Exception as e:
             click.echo(click.style(f"Query error: {e}", fg="red"))
+            project_id = ""
+            try:
+                project_id = read_project_id(ctx.obj["project_dir"])
+            except (FileNotFoundError, ValueError):
+                pass
             if not all_projects and project_id:
                 click.echo(click.style(
                     f"\n  Hint: filter by project with WHERE project_id = '{project_id}'",

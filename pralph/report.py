@@ -4,9 +4,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+from collections import defaultdict
 from pathlib import Path
-
-from pralph import db
 
 
 BUILTIN_QUERIES = {
@@ -71,89 +70,178 @@ def read_project_id(project_dir: str) -> str:
     return pid
 
 
-def gather_report_data(project_id: str) -> dict:
-    """Gather all data needed for the progress report from DuckDB (read-only).
+def read_storage_backend(project_dir: str) -> str:
+    """Read storage backend from .pralph/project.json."""
+    config = Path(project_dir) / ".pralph" / "project.json"
+    if config.exists():
+        try:
+            data = json.loads(config.read_text())
+            if "storage" in data:
+                return data["storage"]
+            # Existing project without storage key — was using DuckDB
+            return "duckdb"
+        except (json.JSONDecodeError, OSError):
+            pass
+    return "jsonl"
 
+
+def run_builtin_query(name: str, state) -> tuple[list[str], list[tuple]]:
+    """Run a named built-in query against a StateManager, returning (columns, rows).
+
+    Works with both JSONL and DuckDB backends.
+    """
+    if name == "progress":
+        stories = state.load_stories()
+        counts: dict[str, int] = defaultdict(int)
+        for s in stories:
+            counts[s.status.value] += 1
+        columns = ["status", "count"]
+        rows = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+        return columns, rows
+
+    if name == "cost":
+        entries = state.load_run_log()
+        agg: dict[str, dict] = defaultdict(lambda: {"iterations": 0, "total_cost": 0.0, "input_tokens": 0, "output_tokens": 0})
+        for e in entries:
+            phase = e.get("phase", "")
+            if not phase:
+                continue
+            a = agg[phase]
+            a["iterations"] += 1
+            a["total_cost"] += e.get("cost_usd", 0.0)
+            a["input_tokens"] += e.get("input_tokens", 0)
+            a["output_tokens"] += e.get("output_tokens", 0)
+        columns = ["phase", "iterations", "total_cost", "input_tokens", "output_tokens"]
+        rows = [(p, a["iterations"], round(a["total_cost"], 4), a["input_tokens"], a["output_tokens"])
+                for p, a in sorted(agg.items(), key=lambda x: x[1]["total_cost"], reverse=True)]
+        return columns, rows
+
+    if name == "stories":
+        stories = state.load_stories()
+        columns = ["id", "title", "status", "priority", "category", "complexity"]
+        rows = [(s.id, s.title, s.status.value, s.priority, s.category, s.complexity)
+                for s in sorted(stories, key=lambda s: (s.priority, s.id))]
+        return columns, rows
+
+    if name == "cost-per-story":
+        entries = state.load_run_log()
+        agg = defaultdict(lambda: {"iterations": 0, "total_cost": 0.0, "input_tokens": 0, "output_tokens": 0})
+        for e in entries:
+            sid = e.get("story_id", "")
+            if not sid:
+                continue
+            a = agg[sid]
+            a["iterations"] += 1
+            a["total_cost"] += e.get("cost_usd", 0.0)
+            a["input_tokens"] += e.get("input_tokens", 0)
+            a["output_tokens"] += e.get("output_tokens", 0)
+        columns = ["story_id", "iterations", "total_cost", "input_tokens", "output_tokens"]
+        rows = [(sid, a["iterations"], round(a["total_cost"], 4), a["input_tokens"], a["output_tokens"])
+                for sid, a in sorted(agg.items(), key=lambda x: x[1]["total_cost"], reverse=True)]
+        return columns, rows
+
+    if name == "errors":
+        entries = state.load_run_log()
+        error_entries = [e for e in entries if not e.get("success", True) and e.get("error", "")]
+        columns = ["iteration", "phase", "story_id", "error", "duration_s"]
+        rows = [(e.get("iteration", 0), e.get("phase", ""), e.get("story_id", ""),
+                 e.get("error", ""), round(e.get("duration", 0.0), 1))
+                for e in reversed(error_entries[-20:])]
+        return columns, rows
+
+    if name == "timeline":
+        entries = state.load_run_log()
+        story_entries = [e for e in entries if e.get("story_id", "")]
+        columns = ["story_id", "phase", "success", "cost", "duration_s", "logged_at"]
+        rows = [(e.get("story_id", ""), e.get("phase", ""), e.get("success", False),
+                 round(e.get("cost_usd", 0.0), 4), round(e.get("duration", 0.0), 1),
+                 e.get("logged_at", ""))
+                for e in story_entries]
+        return columns, rows
+
+    if name == "projects":
+        columns = ["project_id", "name", "created_at"]
+        try:
+            from pralph import db
+            conn = db.get_readonly_connection()
+            try:
+                result = conn.execute("SELECT project_id, name, created_at FROM projects ORDER BY created_at DESC")
+                rows = [tuple(r) for r in result.fetchall()]
+            finally:
+                conn.close()
+        except Exception:
+            rows = [(state.project_id, state.project_id, "")]
+        return columns, rows
+
+    return [], []
+
+
+def gather_report_data(state) -> dict:
+    """Gather all data needed for the progress report.
+
+    Accepts a StateManager instance (either JSONL or DuckDB backend).
     Returns a dict consumable by both the CLI printer and the viewer API.
     """
-    conn = db.get_readonly_connection()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM phase_state WHERE project_id = ? ORDER BY phase", [project_id]
-        )
-        cols = [d[0] for d in rows.description]
-        phase_states = [dict(zip(cols, r)) for r in rows.fetchall()]
+    phase_states = state.load_all_phase_states()
 
-        current_phase = {}
-        for ps in phase_states:
-            if not ps.get("completed", False):
-                current_phase = ps
-                break
-        if not current_phase and phase_states:
-            current_phase = phase_states[-1]
+    current_phase = {}
+    for ps in phase_states:
+        if not ps.get("completed", False):
+            current_phase = ps
+            break
+    if not current_phase and phase_states:
+        current_phase = phase_states[-1]
 
-        rows = conn.execute(
-            "SELECT id, title, status, priority, category, complexity FROM stories WHERE project_id = ? ORDER BY priority, id",
-            [project_id],
-        )
-        cols = [d[0] for d in rows.description]
-        stories = {r[0]: dict(zip(cols, r)) for r in rows.fetchall()}
+    stories_list = state.load_stories()
+    stories = {s.id: {"id": s.id, "title": s.title, "status": s.status.value,
+                       "priority": s.priority, "category": s.category, "complexity": s.complexity}
+               for s in stories_list}
 
-        rows = conn.execute(
-            "SELECT status, COUNT(*) FROM stories WHERE project_id = ? GROUP BY status", [project_id]
-        )
-        status_counts = {r[0]: r[1] for r in rows.fetchall()}
+    status_counts: dict[str, int] = defaultdict(int)
+    for s in stories_list:
+        status_counts[s.status.value] += 1
 
-        rows = conn.execute(
-            """SELECT story_id,
-                      COUNT(*) as iterations,
-                      COALESCE(SUM(cost_usd), 0) as cost_usd,
-                      COALESCE(SUM(duration), 0) as duration,
-                      LIST(impl_status) as statuses
-               FROM run_log
-               WHERE project_id = ? AND story_id != '' AND mode = 'implement'
-               GROUP BY story_id
-               ORDER BY cost_usd DESC""",
-            [project_id],
-        )
-        story_costs = {}
-        for r in rows.fetchall():
-            statuses = r[4] if r[4] else []
-            story_costs[r[0]] = {
-                "iterations": r[1],
-                "cost_usd": r[2],
-                "duration": r[3],
-                "statuses": [s for s in statuses if s],
-            }
+    run_log = state.load_run_log()
 
-        rows = conn.execute(
-            "SELECT phase, COALESCE(SUM(cost_usd), 0) FROM run_log WHERE project_id = ? GROUP BY phase",
-            [project_id],
-        )
-        phase_costs = {r[0]: r[1] for r in rows.fetchall()}
+    # Aggregate story costs from run_log
+    story_agg: dict[str, dict] = defaultdict(lambda: {"iterations": 0, "cost_usd": 0.0, "duration": 0.0, "statuses": []})
+    for entry in run_log:
+        sid = entry.get("story_id", "")
+        if not sid or entry.get("mode") != "implement":
+            continue
+        agg = story_agg[sid]
+        agg["iterations"] += 1
+        agg["cost_usd"] += entry.get("cost_usd", 0.0)
+        agg["duration"] += entry.get("duration", 0.0)
+        impl_status = entry.get("impl_status", "")
+        if impl_status:
+            agg["statuses"].append(impl_status)
+    story_costs = dict(story_agg)
 
-        row = conn.execute(
-            "SELECT COALESCE(SUM(duration), 0) FROM run_log WHERE project_id = ?", [project_id]
-        ).fetchone()
-        total_duration = row[0] if row else 0.0
+    # Phase costs
+    phase_costs: dict[str, float] = defaultdict(float)
+    total_duration = 0.0
+    for entry in run_log:
+        phase = entry.get("phase", "")
+        if phase:
+            phase_costs[phase] += entry.get("cost_usd", 0.0)
+        total_duration += entry.get("duration", 0.0)
+    phase_costs = dict(phase_costs)
 
-        active_story = current_phase.get("active_story_id", "") or None
+    active_story = current_phase.get("active_story_id", "") or None
 
-        row = conn.execute(
-            "SELECT phase, mode, story_id, impl_status FROM run_log WHERE project_id = ? ORDER BY logged_at DESC LIMIT 1",
-            [project_id],
-        ).fetchone()
-        last_entry = None
-        if row:
-            last_entry = {"phase": row[0], "mode": row[1], "story_id": row[2], "impl_status": row[3]}
+    # Last run_log entry
+    last_entry = None
+    if run_log:
+        last = run_log[-1]
+        last_entry = {"phase": last.get("phase", ""), "mode": last.get("mode", ""),
+                      "story_id": last.get("story_id", ""), "impl_status": last.get("impl_status", "")}
 
-        # Cost projection
-        implemented = status_counts.get("implemented", 0)
-        pending = status_counts.get("pending", 0) + status_counts.get("rework", 0)
-        avg_cost = sum(sc["cost_usd"] for sc in story_costs.values()) / max(implemented, 1) if story_costs else 0
-        avg_duration = sum(sc["duration"] for sc in story_costs.values()) / max(implemented, 1) if story_costs else 0
-    finally:
-        conn.close()
+    # Cost projection
+    implemented = status_counts.get("implemented", 0)
+    pending = status_counts.get("pending", 0) + status_counts.get("rework", 0)
+    avg_cost = sum(sc["cost_usd"] for sc in story_costs.values()) / max(implemented, 1) if story_costs else 0
+    avg_duration = sum(sc["duration"] for sc in story_costs.values()) / max(implemented, 1) if story_costs else 0
 
     return {
         "phase_states": phase_states,
@@ -161,7 +249,7 @@ def gather_report_data(project_id: str) -> dict:
         "stories": stories,
         "story_costs": story_costs,
         "phase_costs": phase_costs,
-        "status_counts": status_counts,
+        "status_counts": dict(status_counts),
         "total_duration": total_duration,
         "active_story": active_story,
         "last_entry": last_entry,
