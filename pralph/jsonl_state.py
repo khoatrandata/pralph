@@ -80,33 +80,33 @@ class JsonlStateMixin:
     Expects the host class to provide:
     - self.project_id: str
     - self._lock: threading.RLock
-    - self.state_dir: Path
+    - self.data_dir: Path (~/.pralph/<project-id>/)
     - self.solutions_dir: Path (from FileStateMixin)
     """
 
-    # -- file paths --
+    # -- file paths (all under ~/.pralph/<project-id>/) --
 
     @property
     def _stories_path(self) -> Path:
-        return self.state_dir / "stories.jsonl"  # type: ignore[attr-defined]
+        return self.data_dir / "stories.jsonl"  # type: ignore[attr-defined]
 
     @property
     def _status_log_path(self) -> Path:
-        return self.state_dir / "status.jsonl"  # type: ignore[attr-defined]
+        return self.data_dir / "status.jsonl"  # type: ignore[attr-defined]
 
     @property
     def _run_log_path(self) -> Path:
-        return self.state_dir / "run-log.jsonl"  # type: ignore[attr-defined]
+        return self.data_dir / "run-log.jsonl"  # type: ignore[attr-defined]
 
     @property
     def _phase_state_dir(self) -> Path:
-        d = self.state_dir / "phases"  # type: ignore[attr-defined]
+        d = self.data_dir / "phases"  # type: ignore[attr-defined]
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     @property
     def _phase1_analysis_path(self) -> Path:
-        return self.state_dir / "phase1-analysis.json"  # type: ignore[attr-defined]
+        return self.data_dir / "phase1-analysis.json"  # type: ignore[attr-defined]
 
     @property
     def _solutions_index_path(self) -> Path:

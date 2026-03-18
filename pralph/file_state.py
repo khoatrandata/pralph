@@ -119,11 +119,11 @@ class FileStateMixin:
             return self.guardrails_path.read_text()
         return ""
 
-    # -- solutions directory --
+    # -- solutions directory (under ~/.pralph/<project-id>/) --
 
     @property
     def solutions_dir(self) -> Path:
-        return self.state_dir / "solutions"
+        return self.data_dir / "solutions"  # type: ignore[attr-defined]
 
     def read_solution(self, filename: str) -> str:
         """Read a specific solution file."""

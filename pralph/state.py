@@ -25,6 +25,10 @@ class _BaseStateManager(FileStateMixin):
         # Resolve project_id from project.json or create it
         self.project_id = self._resolve_project_id(project_name)
 
+        # Central data directory: ~/.pralph/<project-id>/
+        self.data_dir = Path.home() / ".pralph" / self.project_id
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
     @property
     def _project_config_path(self) -> Path:
         return self.state_dir / "project.json"
@@ -69,6 +73,34 @@ class _BaseStateManager(FileStateMixin):
             f"Project not initialized. Run 'pralph plan --name <project-name>' first.\n"
             f"  directory: {self.project_dir}"
         )
+
+    def _migrate_data_dir(self) -> None:
+        """Move data files from .pralph/ to ~/.pralph/<project-id>/ if needed."""
+        import shutil
+
+        moves = [
+            ("stories.jsonl", "stories.jsonl"),
+            ("status.jsonl", "status.jsonl"),
+            ("run-log.jsonl", "run-log.jsonl"),
+            ("phase1-analysis.json", "phase1-analysis.json"),
+        ]
+        for src_name, dst_name in moves:
+            src = self.state_dir / src_name
+            dst = self.data_dir / dst_name
+            if src.exists() and not dst.exists():
+                shutil.move(str(src), str(dst))
+
+        # Migrate phases/ directory
+        src_phases = self.state_dir / "phases"
+        dst_phases = self.data_dir / "phases"
+        if src_phases.is_dir() and not dst_phases.exists():
+            shutil.move(str(src_phases), str(dst_phases))
+
+        # Migrate solutions/ directory
+        src_solutions = self.state_dir / "solutions"
+        dst_solutions = self.data_dir / "solutions"
+        if src_solutions.is_dir() and not dst_solutions.exists():
+            shutil.move(str(src_solutions), str(dst_solutions))
 
     def _has_legacy_data(self) -> bool:
         """Check if this project has old-style JSONL files (pre-DuckDB)."""
@@ -134,6 +166,8 @@ def _build_duckdb_class():
                     db.register_project(conn, self.project_id, self.project_dir.name)
                     if needs_migration(self.state_dir, self.project_id, conn):
                         migrate_project(self.state_dir, self.project_id, conn)
+                # Move solutions/ to data_dir after DuckDB migration
+                self._migrate_data_dir()
 
         @property
         def _conn(self):
@@ -190,7 +224,10 @@ def _build_jsonl_class():
     from pralph.jsonl_state import JsonlStateMixin
 
     class JsonlStateManager(_BaseStateManager, JsonlStateMixin):
-        pass
+        def __init__(self, project_dir: str, *, project_name: str | None = None, readonly: bool = False) -> None:
+            super().__init__(project_dir, project_name=project_name, readonly=readonly)
+            if not readonly:
+                self._migrate_data_dir()
 
     return JsonlStateManager
 
