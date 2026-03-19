@@ -47,13 +47,24 @@ from pralph.state import StateManager
 
 
 def _token_kwargs(cr: ClaudeResult) -> dict:
-    """Extract token fields from a ClaudeResult as keyword arguments for IterationResult."""
-    return {
+    """Extract token and session fields from a ClaudeResult as keyword arguments for IterationResult."""
+    d: dict = {
         "input_tokens": cr.input_tokens,
         "output_tokens": cr.output_tokens,
         "cache_read_input_tokens": cr.cache_read_input_tokens,
         "cache_creation_input_tokens": cr.cache_creation_input_tokens,
     }
+    if cr.session_id:
+        d["session_id"] = cr.session_id
+    return d
+
+
+def _stamp_session(stories: list[Story], session_id: str) -> None:
+    """Tag stories with the session_id that created them."""
+    if not session_id:
+        return
+    for s in stories:
+        s.metadata["session_id"] = session_id
 
 
 # ── session resume support ───────────────────────────────────────────
@@ -115,6 +126,8 @@ def _run_loop(
             choice = _session_resume_prompt(ps)
             if choice == "headless":
                 result = resume_fn(ps.active_session_id, ps)
+                if not result.session_id:
+                    result.session_id = ps.active_session_id
                 state.log_iteration(result)
                 ps.total_cost_usd += result.cost_usd
                 _clear_session_tracking(ps)
@@ -174,6 +187,8 @@ def _run_loop(
         t0 = time.time()
         result = iteration_fn(i, ps)
         result.duration = time.time() - t0
+        if not result.session_id and ps.active_session_id:
+            result.session_id = ps.active_session_id
 
         state.log_iteration(result)
         ps.total_cost_usd += result.cost_usd
@@ -380,6 +395,7 @@ def run_stories_loop(
         new_stories = [s for s in stories if s.id not in existing_ids]
 
         if new_stories:
+            _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
             click.echo(click.style(f"  +{len(new_stories)} stories", fg='green', bold=True) + f" (mode={mode})")
             for s in new_stories:
@@ -408,6 +424,7 @@ def run_stories_loop(
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
         if new_stories:
+            _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
             click.echo(click.style(f"  +{len(new_stories)} stories (resumed)", fg='green', bold=True))
             for s in new_stories:
@@ -515,6 +532,7 @@ def run_add(
                 story.id = candidate
                 break
 
+    _stamp_session([story], result.session_id)
     state.append_stories([story])
     state.log_iteration(IterationResult(
         iteration=1, phase="add", mode="add",
@@ -594,6 +612,7 @@ def run_refine(
         existing_ids.add(s.id)
 
     # Append new stories
+    _stamp_session(stories, result.session_id)
     state.append_stories(stories)
 
     # Mark originals as skipped
@@ -670,6 +689,7 @@ def run_ideate_loop(
         new_stories = [s for s in stories if s.id not in existing_ids]
 
         if new_stories:
+            _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
             click.echo(click.style(f"  +{len(new_stories)} stories", fg='green', bold=True))
             for s in new_stories:
@@ -707,6 +727,7 @@ def run_ideate_loop(
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
         if new_stories:
+            _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
             click.echo(click.style(f"  +{len(new_stories)} stories (resumed)", fg='green', bold=True))
             for s in new_stories:
@@ -799,6 +820,7 @@ def run_webgen_loop(
         if new_stories:
             for s in new_stories:
                 s.source = "webgen"
+            _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
             click.echo(f"  +{len(new_stories)} webgen stories")
             for s in new_stories:
@@ -836,6 +858,7 @@ def run_webgen_loop(
         if new_stories:
             for s in new_stories:
                 s.source = "webgen"
+            _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
             click.echo(click.style(f"  +{len(new_stories)} webgen stories (resumed)", fg='green', bold=True))
             for s in new_stories:

@@ -82,6 +82,7 @@ class IterationResult:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    session_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -101,6 +102,8 @@ class IterationResult:
         }
         if self.story_id:
             d["story_id"] = self.story_id
+        if self.session_id:
+            d["session_id"] = self.session_id
         return d
 
 

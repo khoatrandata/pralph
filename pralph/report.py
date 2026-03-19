@@ -38,15 +38,24 @@ BUILTIN_QUERIES = {
     ),
     "errors": (
         "Recent errors",
-        """SELECT iteration, phase, story_id, error, ROUND(duration, 1) as duration_s
+        """SELECT iteration, phase, story_id, session_id, error, ROUND(duration, 1) as duration_s
            FROM run_log WHERE project_id = ? AND success = false AND error != ''
            ORDER BY logged_at DESC LIMIT 20""",
     ),
     "timeline": (
         "Implementation timeline",
-        """SELECT story_id, phase, success, ROUND(cost_usd, 4) as cost, ROUND(duration, 1) as duration_s, logged_at
+        """SELECT story_id, phase, success, session_id, ROUND(cost_usd, 4) as cost, ROUND(duration, 1) as duration_s, logged_at
            FROM run_log WHERE project_id = ? AND story_id != ''
            ORDER BY logged_at""",
+    ),
+    "sessions": (
+        "Session history",
+        """SELECT session_id, phase, story_id, COUNT(*) as iterations,
+                  ROUND(SUM(cost_usd), 4) as total_cost,
+                  MIN(logged_at) as started, MAX(logged_at) as ended
+           FROM run_log WHERE project_id = ? AND session_id != ''
+           GROUP BY session_id, phase, story_id
+           ORDER BY started""",
     ),
     "projects": (
         "All registered projects",
@@ -143,20 +152,40 @@ def run_builtin_query(name: str, state) -> tuple[list[str], list[tuple]]:
     if name == "errors":
         entries = state.load_run_log()
         error_entries = [e for e in entries if not e.get("success", True) and e.get("error", "")]
-        columns = ["iteration", "phase", "story_id", "error", "duration_s"]
+        columns = ["iteration", "phase", "story_id", "session_id", "error", "duration_s"]
         rows = [(e.get("iteration", 0), e.get("phase", ""), e.get("story_id", ""),
-                 e.get("error", ""), round(e.get("duration", 0.0), 1))
+                 e.get("session_id", ""), e.get("error", ""), round(e.get("duration", 0.0), 1))
                 for e in reversed(error_entries[-20:])]
         return columns, rows
 
     if name == "timeline":
         entries = state.load_run_log()
         story_entries = [e for e in entries if e.get("story_id", "")]
-        columns = ["story_id", "phase", "success", "cost", "duration_s", "logged_at"]
+        columns = ["story_id", "phase", "success", "session_id", "cost", "duration_s", "logged_at"]
         rows = [(e.get("story_id", ""), e.get("phase", ""), e.get("success", False),
-                 round(e.get("cost_usd", 0.0), 4), round(e.get("duration", 0.0), 1),
-                 e.get("logged_at", ""))
+                 e.get("session_id", ""), round(e.get("cost_usd", 0.0), 4),
+                 round(e.get("duration", 0.0), 1), e.get("logged_at", ""))
                 for e in story_entries]
+        return columns, rows
+
+    if name == "sessions":
+        entries = state.load_run_log()
+        agg: dict[str, dict] = {}
+        for e in entries:
+            sid = e.get("session_id", "")
+            if not sid:
+                continue
+            if sid not in agg:
+                agg[sid] = {"phase": e.get("phase", ""), "story_id": e.get("story_id", ""),
+                            "iterations": 0, "total_cost": 0.0,
+                            "started": e.get("logged_at", ""), "ended": e.get("logged_at", "")}
+            a = agg[sid]
+            a["iterations"] += 1
+            a["total_cost"] += e.get("cost_usd", 0.0)
+            a["ended"] = e.get("logged_at", "")
+        columns = ["session_id", "phase", "story_id", "iterations", "total_cost", "started", "ended"]
+        rows = [(sid, a["phase"], a["story_id"], a["iterations"], round(a["total_cost"], 4),
+                 a["started"], a["ended"]) for sid, a in agg.items()]
         return columns, rows
 
     if name == "projects":

@@ -91,9 +91,17 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             output_tokens INTEGER DEFAULT 0,
             cache_read_input_tokens INTEGER DEFAULT 0,
             cache_creation_input_tokens INTEGER DEFAULT 0,
+            session_id TEXT DEFAULT '',
             logged_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
+
+    # Migration: add session_id column if missing (existing DBs)
+    try:
+        conn.execute("SELECT session_id FROM run_log LIMIT 0")
+    except Exception:
+        conn.execute("ALTER TABLE run_log ADD COLUMN session_id TEXT DEFAULT ''")
+
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS phase_state (
