@@ -130,14 +130,23 @@ def plan(ctx, name, prompt, prompt_file, reset):
     project_dir = ctx.obj["project_dir"]
     config_path = os.path.join(project_dir, ".pralph", "project.json")
 
-    # On first run, require --name or prompt for it
+    # On first run, require --name or derive from directory name or prompt for it
     if not os.path.exists(config_path) and not name:
-        name = click.prompt("Project name (used as ID across sessions)")
+        # Default to directory name if stdin is not a TTY (non-interactive)
+        if not sys.stdin.isatty():
+            name = os.path.basename(project_dir)
+            click.echo(f"  Auto-derived project name: {name}")
+        else:
+            name = click.prompt("Project name (used as ID across sessions)")
 
     state = StateManager(project_dir, project_name=name)
     if reset:
         _reset_phase(state, "plan")
-    prompt = _resolve_prompt(prompt, "Design prompt", file_value=prompt_file)
+    # If .pralph/plan-prompt.md exists, don't require a CLI prompt
+    if not prompt and not prompt_file and state.read_phase_prompt("plan"):
+        prompt = ""  # assembler will use plan-prompt.md
+    else:
+        prompt = _resolve_prompt(prompt, "Design prompt", file_value=prompt_file)
     click.echo(f"pralph plan — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {state.project_id}")
     click.echo(f"  model: {ctx.obj['model']}")

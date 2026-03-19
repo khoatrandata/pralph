@@ -59,16 +59,20 @@ _SLUG_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
 def make_session_id(project_id: str, phase: str, story_id: str = "", title: str = "") -> str:
-    """Build a human-readable session ID: {project_id}-{phase}[-{story_id}[-{title}]]-{short_uuid}."""
-    parts = [_SLUG_RE.sub("-", project_id), phase]
+    """Build a valid UUID session ID for Claude Code.
+
+    Uses uuid5 with a descriptive name so the ID is both a valid UUID and
+    traceable back to the project/phase/story context via the namespace.
+    A random suffix ensures uniqueness across iterations.
+    """
+    parts = [project_id, phase]
     if story_id:
-        parts.append(_SLUG_RE.sub("-", story_id))
+        parts.append(story_id)
     if title:
-        slug = _SLUG_RE.sub("-", title.lower()).strip("-")[:40].rstrip("-")
-        if slug:
-            parts.append(slug)
-    parts.append(uuid.uuid4().hex[:8])
-    return "-".join(parts)
+        parts.append(title[:40])
+    parts.append(uuid.uuid4().hex[:8])  # random suffix for uniqueness
+    name = "-".join(parts)
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, name))
 
 
 def run_claude(
@@ -99,7 +103,7 @@ def run_claude(
         if dangerously_skip_permissions:
             cmd.append("--dangerously-skip-permissions")
     else:
-        session_id = session_id or uuid.uuid4().hex[:8]
+        session_id = session_id or str(uuid.uuid4())
         cmd = [
             "claude", "-p", "--verbose", "--model", model,
             "--output-format", "stream-json", "--session-id", session_id,
