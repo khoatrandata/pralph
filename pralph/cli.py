@@ -402,13 +402,10 @@ def implement(ctx, story_id, phase1, review, compound, prompt, reset):
 @main.command()
 @click.argument("prompt_args", nargs=-1)
 @click.option("--prompt", default=None, help="Task prompt (prompted if omitted)")
-@click.option("--reset", is_flag=True, help="Reset phase state and start fresh")
 @click.pass_context
-def justloop(ctx, prompt_args, prompt, reset):
+def justloop(ctx, prompt_args, prompt):
     """Run a prompt in a loop until complete."""
     state = StateManager(ctx.obj["project_dir"])
-    if reset:
-        _reset_phase(state, "justloop")
 
     # Resolve prompt: positional args > --prompt > stdin > interactive
     if prompt_args:
@@ -417,6 +414,9 @@ def justloop(ctx, prompt_args, prompt, reset):
         user_prompt = prompt
     else:
         user_prompt = _resolve_prompt(None, "Task prompt")
+
+    # Always start fresh — justloop is a standalone tool, not a resumable phase
+    _reset_phase(state, "justloop")
 
     click.echo(f"pralph justloop — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {ctx.obj['project_dir']}")
