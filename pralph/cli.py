@@ -421,7 +421,7 @@ def justloop(ctx, prompt_args, prompt):
     click.echo(f"pralph justloop — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {ctx.obj['project_dir']}")
     click.echo(f"  model: {ctx.obj['model']}")
-    click.echo(f"  prompt: {user_prompt[:120]}")
+    click.echo(f"  prompt: {user_prompt}")
 
     run_justloop(
         state,
