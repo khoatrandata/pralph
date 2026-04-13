@@ -18,6 +18,7 @@
   - [Project state](#project-state)
 - [Story viewer](#story-viewer)
 - [Customization](#customization)
+  - [Configuration](#configuration)
   - [Additional prompt files](#additional-prompt-files)
   - [Prompt template overrides](#prompt-template-overrides)
 - [Acknowledgements](#acknowledgements)
@@ -65,6 +66,48 @@ Inspired by the [compound-engineering-plugin](https://github.com/EveryInc/compou
 - **`compound`** standalone command — ad-hoc capture from recent work
 
 Solutions are stored in `.pralph/solutions/` and automatically recalled during future plan and implement phases via keyword search.
+
+#### Global compound learning
+
+By default, solutions are scoped to the current project. Enable **global compound learning** to also save solutions to `~/.pralph/solutions/`, subdivided by auto-detected domain (e.g. `swift-ios`, `rust`, `docker`). This means learnings from one project automatically carry over to new projects in the same domain — no manual copying.
+
+To opt in, set `global_compound` in your config (see [Configuration](#configuration)):
+
+```json
+// ~/.pralph/config.json
+{
+  "global_compound": true
+}
+```
+
+**Recall is always global.** Even without `global_compound` enabled, plan and implement phases will search `~/.pralph/solutions/` for relevant learnings matching the project's detected domains. The setting only controls whether new solutions are *saved* globally.
+
+**Domain detection** is automatic — pralph scans project files to determine domains:
+
+| Files | Domain |
+|---|---|
+| `*.swift`, `Package.swift`, `*.xcodeproj` | `swift-ios` |
+| `Cargo.toml`, `*.rs` | `rust` |
+| `Dockerfile`, `docker-compose.yml` | `docker` |
+| `*.py`, `pyproject.toml` | `python` |
+| `*.ts`, `*.tsx`, `package.json` | `typescript` |
+| `*.go`, `go.mod` | `go` |
+| `*.tf` | `terraform` |
+| ... | (40+ rules for common languages/platforms) |
+
+A project can have multiple domains (e.g. a Rust service with Docker gets both `rust` and `docker` learnings). Override detection with `.pralph/domains.txt` (one domain per line) or the `--domain` CLI flag.
+
+```
+~/.pralph/solutions/
+  swift-ios/
+    index.jsonl
+    build-errors/
+    ui-bugs/
+  rust/
+    index.jsonl
+    build-errors/
+    runtime-errors/
+```
 
 ## Installation
 
@@ -163,7 +206,7 @@ Inspired by the [compound-engineering-plugin](https://github.com/EveryInc/compou
 
 The value compounds over time. The first time Claude hits a tricky CORS config, it burns tokens researching. Document that solution, and the next project that needs CORS gets it right on the first iteration. Build errors, deployment quirks, library gotchas, auth patterns — every solution captured makes subsequent implementations faster, cheaper, and more reliable. Early runs are slow; later runs benefit from everything that came before.
 
-Solutions are stored in `.pralph/solutions/` and automatically recalled during future plan and implement phases via keyword search — no manual lookup needed.
+Solutions are stored in `.pralph/solutions/` and automatically recalled during future plan and implement phases via keyword search — no manual lookup needed. With [global compound learning](#global-compound-learning) enabled, solutions are also saved to `~/.pralph/solutions/{domain}/` and automatically recalled in new projects that share the same domain.
 
 ```bash
 # Auto-capture learnings after each successful story
@@ -206,6 +249,7 @@ Input is resolved in order: `--prompt` flag > stdin pipe > interactive prompt.
 | `--project-dir` | `.` | Target project directory |
 | `--dangerously-skip-permissions` | off | Bypass Claude Code permission checks |
 | `--extra-tools` | — | Additional MCP tools (comma-separated) |
+| `--domain` | auto | Override detected domains for global learning (repeatable) |
 
 ### Command options
 
@@ -305,6 +349,8 @@ All state lives in `.pralph/` within your project:
 
 ```
 .pralph/
+  config.json           # Project-level config overrides (optional)
+  domains.txt           # Override auto-detected domains (optional)
   design-doc.md         # Design document (Phase 1)
   guardrails.md         # Coding standards and constraints
   stories.jsonl         # Story backlog
@@ -317,6 +363,23 @@ All state lives in `.pralph/` within your project:
     index.jsonl         # Lightweight index for fast keyword search
     build-errors/       # Categorized solution documents
     runtime-errors/
+    ...
+```
+
+Global state lives in `~/.pralph/`:
+
+```
+~/.pralph/
+  config.json           # User-wide config defaults
+  prompts/              # User-wide prompt template overrides
+  solutions/            # Global compound learning (domain-scoped)
+    swift-ios/          # One directory per detected domain
+      index.jsonl
+      build-errors/
+      ui-bugs/
+    rust/
+      index.jsonl
+      runtime-errors/
     ...
 ```
 
@@ -338,6 +401,23 @@ A dark-themed web UI for browsing and managing your story backlog. Features:
 <img src="docs/viewer-timeline.png" alt="Story viewer — timeline view with dependency arrows" width="800">
 
 ## Customization
+
+### Configuration
+
+pralph uses JSON config files for persistent settings. Config is resolved in order: project `.pralph/config.json` > user `~/.pralph/config.json` > defaults.
+
+```json
+// ~/.pralph/config.json
+{
+  "global_compound": true
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `global_compound` | `bool` | `false` | Save compound learnings to `~/.pralph/solutions/{domain}/` for cross-project reuse |
+
+Set user-wide defaults in `~/.pralph/config.json`. Override per-project in `.pralph/config.json` (e.g. disable global saving for a throwaway project).
 
 ### Additional prompt files
 

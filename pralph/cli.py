@@ -78,9 +78,10 @@ class OrderedGroup(click.Group):
 @click.option("--project-dir", default=None, type=click.Path(exists=True), help="Target project dir [default: cwd]")
 @click.option("--dangerously-skip-permissions", is_flag=True, help="Pass permission bypass to claude")
 @click.option("--extra-tools", default=None, help="Additional tools to allow (comma-separated, e.g. mcp__db__query,mcp__api__call)")
+@click.option("--domain", multiple=True, help="Override detected domains (repeatable, e.g. --domain rust --domain docker)")
 @click.version_option(version=__version__)
 @click.pass_context
-def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_dir, dangerously_skip_permissions, extra_tools):
+def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_dir, dangerously_skip_permissions, extra_tools, domain):
     """pralph — Planned Ralph: multi-phase development workflow powered by Claude Code."""
     ctx.ensure_object(dict)
     ctx.obj["model"] = model
@@ -91,6 +92,7 @@ def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_
     ctx.obj["project_dir"] = project_dir or os.getcwd()
     ctx.obj["dangerously_skip_permissions"] = dangerously_skip_permissions
     ctx.obj["extra_tools_cli"] = extra_tools or ""
+    ctx.obj["domains"] = list(domain) if domain else None
 
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
@@ -102,7 +104,7 @@ def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_
 @click.pass_context
 def plan(ctx, prompt, reset):
     """Phase 1: Create/refine a design document."""
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     if reset:
         _reset_phase(state, "plan")
     prompt = _resolve_prompt(prompt, "Design prompt")
@@ -128,7 +130,7 @@ def plan(ctx, prompt, reset):
 @click.pass_context
 def stories(ctx, extract_weight, reset):
     """Phase 2: Extract user stories from design doc."""
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     if reset:
         _reset_phase(state, "stories")
     click.echo(f"pralph stories — max {ctx.obj['max_iterations']} iterations")
@@ -153,7 +155,7 @@ def stories(ctx, extract_weight, reset):
 @click.pass_context
 def webgen(ctx, reset):
     """Phase 2b: Discover missing requirements via web research."""
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     if reset:
         _reset_phase(state, "webgen")
     click.echo(f"pralph webgen — max {ctx.obj['max_iterations']} iterations")
@@ -179,7 +181,7 @@ def webgen(ctx, reset):
 def add(ctx, prompt, is_next, anytime):
     """Add a single story from an idea."""
     prompt = _resolve_prompt(prompt, "Idea")
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     click.echo(f"pralph add")
     click.echo(f"  project: {ctx.obj['project_dir']}")
     click.echo(f"  model: {ctx.obj['model']}")
@@ -223,7 +225,7 @@ def ideate(ctx, ideas_args, ideas_file, prompt, reset):
 
     Ideas can be passed as arguments: pralph ideate "add dark mode" "CSV export"
     """
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     if reset:
         _reset_phase(state, "ideate")
 
@@ -290,7 +292,7 @@ def refine(ctx, instruction, prompt, story_ids, id_pattern):
     """Refine existing stories: split, merge, or rewrite."""
     import fnmatch
 
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     all_stories = state.load_stories()
     stories_by_id = {s.id: s for s in all_stories}
 
@@ -370,15 +372,19 @@ def refine(ctx, instruction, prompt, story_ids, id_pattern):
 @click.pass_context
 def implement(ctx, story_id, phase1, review, compound, prompt, reset):
     """Phase 3: Implement stories from backlog."""
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     if reset:
         _reset_phase(state, "implement")
     prompt = prompt or _read_stdin() or ""
+    save_global = state.global_compound
     click.echo(f"pralph implement — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {ctx.obj['project_dir']}")
     click.echo(f"  model: {ctx.obj['model']}")
     click.echo(f"  review: {'on' if review else 'off'}")
     click.echo(f"  compound: {'on' if compound else 'off'}")
+    if compound and save_global:
+        domains = state.detect_domains()
+        click.echo(f"  global: on (domains: {', '.join(domains) or 'none detected'})")
     if story_id:
         click.echo(f"  story: {story_id}")
 
@@ -391,6 +397,7 @@ def implement(ctx, story_id, phase1, review, compound, prompt, reset):
         phase1=phase1,
         review=review,
         compound=compound,
+        save_global=save_global,
         user_prompt=prompt,
         extra_tools=_get_extra_tools(ctx, state),
         verbose=ctx.obj["verbose"],
@@ -405,7 +412,7 @@ def implement(ctx, story_id, phase1, review, compound, prompt, reset):
 @click.pass_context
 def justloop(ctx, prompt_args, prompt):
     """Run a prompt in a loop until complete."""
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
 
     # Resolve prompt: positional args > --prompt > stdin > interactive
     if prompt_args:
@@ -443,10 +450,14 @@ def justloop(ctx, prompt_args, prompt):
 def compound(ctx, story_id, prompt):
     """Capture learnings from recent work (compound learning)."""
     prompt = _resolve_prompt(prompt, "Description of work done")
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
+    save_global = state.global_compound
     click.echo(f"pralph compound")
     click.echo(f"  project: {ctx.obj['project_dir']}")
     click.echo(f"  model: {ctx.obj['model']}")
+    if save_global:
+        domains = state.detect_domains()
+        click.echo(f"  global: on (domains: {', '.join(domains) or 'none detected'})")
     if story_id:
         click.echo(f"  story: {story_id}")
     if prompt:
@@ -460,6 +471,7 @@ def compound(ctx, story_id, prompt):
         verbose=ctx.obj["verbose"],
         dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
         max_budget_usd=ctx.obj["max_budget_usd"],
+        save_global=save_global,
     )
 
     click.echo(f"\n  Cost: ${cost:.4f}")
@@ -469,7 +481,7 @@ def compound(ctx, story_id, prompt):
 @click.pass_context
 def reset_errors(ctx):
     """Reset error stories to pending and clear error state."""
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
 
     # Show error details before resetting
     error_stories = [s for s in state.load_stories() if s.status == StoryStatus.error]
@@ -516,7 +528,7 @@ def reset_errors(ctx):
 @click.pass_context
 def viewer(ctx, port, no_open):
     """Browse and review user stories in a web UI."""
-    state = StateManager(ctx.obj["project_dir"])
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
     stories = state.load_stories()
     if not stories:
         click.echo("No stories found. Run 'pralph stories' first.")

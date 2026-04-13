@@ -888,6 +888,7 @@ def run_implement_loop(
     phase1: bool = True,
     review: bool = True,
     compound: bool = False,
+    save_global: bool = False,
     user_prompt: str = "",
     extra_tools: str = "",
     verbose: bool = False,
@@ -917,7 +918,7 @@ def run_implement_loop(
     if story_id:
         return _implement_single(state, story_id, model=model, system_prompt=system_prompt,
                                  tools=tools, user_prompt=user_prompt, review=review,
-                                 compound=compound, verbose=verbose,
+                                 compound=compound, save_global=save_global, verbose=verbose,
                                  dangerously_skip_permissions=dangerously_skip_permissions,
                                  max_budget_usd=max_budget_usd)
 
@@ -1125,6 +1126,7 @@ def run_implement_loop(
                 verbose=verbose,
                 dangerously_skip_permissions=dangerously_skip_permissions,
                 max_budget_usd=max_budget_usd,
+                save_global=save_global,
             )
             total_cost += compound_result.cost_usd
             total_input += compound_result.input_tokens
@@ -1337,6 +1339,7 @@ def _implement_single(
     user_prompt: str = "",
     review: bool = True,
     compound: bool = False,
+    save_global: bool = False,
     verbose: bool,
     dangerously_skip_permissions: bool,
     max_budget_usd: float | None,
@@ -1417,6 +1420,7 @@ def _implement_single(
             verbose=verbose,
             dangerously_skip_permissions=dangerously_skip_permissions,
             max_budget_usd=max_budget_usd,
+            save_global=save_global,
         )
 
     return PhaseState(phase="implement", completed=True, completion_reason="single_story_done")
@@ -1450,6 +1454,7 @@ def _run_compound_capture(
     verbose: bool,
     dangerously_skip_permissions: bool,
     max_budget_usd: float | None,
+    save_global: bool = False,
 ) -> _CompoundResult:
     """Run compound learning capture after a successful implementation. Returns result with cost and tokens."""
     click.echo(click.style(f"  Capturing learnings: {story.id}", fg='magenta', bold=True))
@@ -1515,6 +1520,13 @@ def _run_compound_capture(
         path = state.save_solution(category, filename_slug, content, index_entry)
         click.echo(click.style(f"  + {title}", fg='green') + f" → {path}")
 
+        # Optionally save to global domain-scoped store
+        if save_global:
+            global_paths = state.save_solution_global(category, filename_slug, content, index_entry)
+            if global_paths:
+                domains = state.detect_domains()
+                click.echo(click.style(f"    ↑ global", fg='cyan') + f" [{', '.join(domains)}]")
+
     click.echo(click.style(f"  Captured {len(solutions)} solution(s)", fg='green', bold=True))
     return _CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
 
@@ -1528,6 +1540,7 @@ def run_compound(
     verbose: bool = False,
     dangerously_skip_permissions: bool = False,
     max_budget_usd: float | None = None,
+    save_global: bool = False,
 ) -> float:
     """Standalone compound capture. Returns cost."""
     from pralph.assembler import build_guardrails_system_prompt
@@ -1555,6 +1568,7 @@ def run_compound(
         verbose=verbose,
         dangerously_skip_permissions=dangerously_skip_permissions,
         max_budget_usd=max_budget_usd,
+        save_global=save_global,
     )
     return cr.cost_usd
 

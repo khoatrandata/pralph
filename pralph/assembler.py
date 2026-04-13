@@ -91,9 +91,9 @@ def assemble_plan_prompt(
     project_prompt = state.read_phase_prompt("plan")
     combined_prompt = "\n\n".join(p for p in [project_prompt, user_prompt] if p) or "Create a comprehensive design document."
 
-    # Build solutions recall section for plan awareness
+    # Build solutions recall section for plan awareness (local + global)
     solutions_recall = ""
-    if state.has_solutions():
+    if state.has_solutions() or state.has_global_solutions():
         solutions_ctx = _build_solutions_context(state)
         if solutions_ctx:
             recall = _safe_sub(COMPOUND_RECALL_SECTION, "solutions_context", _escape_template_vars(solutions_ctx))
@@ -318,9 +318,9 @@ def assemble_implement_prompt(
     # Rework context: include reviewer feedback when retrying a rejected story
     rework_context = _build_rework_context(state, story)
 
-    # Compound learning: inject relevant past solutions
+    # Compound learning: inject relevant past solutions (local + global)
     solutions_recall = ""
-    if state.has_solutions():
+    if state.has_solutions() or state.has_global_solutions():
         solutions_ctx = _build_solutions_context(state, story)
         if solutions_ctx:
             recall = _safe_sub(COMPOUND_RECALL_SECTION, "solutions_context", _escape_template_vars(solutions_ctx))
@@ -444,10 +444,14 @@ def assemble_phase1_implement_prompt(
 def _build_solutions_context(state: StateManager, story: "Story | None" = None) -> str:
     """Build solutions context for injection into other prompts.
 
-    With story: searches index using story title/category, includes up to 3 full docs.
+    Merges both project-local and global (domain-matched) solutions.
+    With story: searches using story title/category, includes up to 3 full docs.
     Without story (plan phase): includes summary of all solutions.
     """
-    if not state.has_solutions():
+    has_local = state.has_solutions()
+    has_global = state.has_global_solutions()
+
+    if not has_local and not has_global:
         return ""
 
     if story is not None:
@@ -456,29 +460,38 @@ def _build_solutions_context(state: StateManager, story: "Story | None" = None) 
         if story.category:
             query_parts.append(story.category)
         query = " ".join(query_parts)
-        matches = state.search_solutions(query, max_results=3)
+        matches = state.search_all_solutions(query, max_results=3)
 
         if not matches:
             return ""
 
         parts: list[str] = []
         for match in matches:
-            filename = match.get("filename", "")
             title = match.get("title", "?")
-            content = state.read_solution(filename)
+            source = match.get("_source", "local")
+            source_label = " (global)" if source == "global" else ""
+            content = state.read_any_solution(match)
             if content:
-                # Truncate individual solutions
                 if len(content) > 2000:
                     content = content[:2000] + "\n\n(... truncated)"
-                parts.append(f"### {title}\n\n{content}")
+                parts.append(f"### {title}{source_label}\n\n{content}")
             else:
                 tags = ", ".join(match.get("tags", []))
-                parts.append(f"### {title}\n\nTags: {tags}")
+                parts.append(f"### {title}{source_label}\n\nTags: {tags}")
 
         return "\n\n---\n\n".join(parts)
     else:
-        # Summary mode: compact overview of all solutions
-        return state.get_solutions_summary()
+        # Summary mode: compact overview of all solutions (local + global)
+        summaries: list[str] = []
+        local_summary = state.get_solutions_summary()
+        if local_summary:
+            summaries.append(local_summary)
+        global_summary = state.get_global_solutions_summary()
+        if global_summary:
+            if summaries:
+                summaries.append("\n### Global learnings\n")
+            summaries.append(global_summary)
+        return "\n".join(summaries)
 
 
 def assemble_compound_prompt(
