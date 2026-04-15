@@ -1451,7 +1451,6 @@ def _implement_single(
     return PhaseState(phase="implement", completed=True, completion_reason="single_story_done")
 
 
-
 # ── Justloop ─────────────────────────────────────────────────────────
 
 

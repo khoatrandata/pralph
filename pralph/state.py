@@ -64,13 +64,13 @@ class ProjectNotInitializedError(Exception):
 class _BaseStateManager(FileStateMixin):
     """Base class with shared init logic — no storage mixin yet."""
 
-    def __init__(self, project_dir: str, *, project_name: str | None = None, readonly: bool = False) -> None:
+    def __init__(self, project_dir: str, *, project_name: str | None = None, readonly: bool = False, domains: list[str] | None = None) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.state_dir = self.project_dir / ".pralph"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._readonly = readonly
-        self._domain_override: list[str] | None = None
+        self._domain_override = domains
 
         # Resolve project_id from project.json or create it
         self.project_id = self._resolve_project_id(project_name)
@@ -498,8 +498,8 @@ def _build_duckdb_class():
 
     class DuckDbStateManager(_BaseStateManager, DbStateMixin):
 
-        def __init__(self, project_dir: str, *, project_name: str | None = None, readonly: bool = False) -> None:
-            super().__init__(project_dir, project_name=project_name, readonly=readonly)
+        def __init__(self, project_dir: str, *, project_name: str | None = None, readonly: bool = False, domains: list[str] | None = None) -> None:
+            super().__init__(project_dir, project_name=project_name, readonly=readonly, domains=domains)
             self.__conn: duckdb.DuckDBPyConnection | None = None
 
             if readonly:
@@ -567,8 +567,8 @@ def _build_jsonl_class():
     from pralph.jsonl_state import JsonlStateMixin
 
     class JsonlStateManager(_BaseStateManager, JsonlStateMixin):
-        def __init__(self, project_dir: str, *, project_name: str | None = None, readonly: bool = False) -> None:
-            super().__init__(project_dir, project_name=project_name, readonly=readonly)
+        def __init__(self, project_dir: str, *, project_name: str | None = None, readonly: bool = False, domains: list[str] | None = None) -> None:
+            super().__init__(project_dir, project_name=project_name, readonly=readonly, domains=domains)
             if not readonly:
                 self._migrate_data_dir()
 
@@ -580,7 +580,7 @@ _duckdb_cls = None
 _jsonl_cls = None
 
 
-def StateManager(project_dir: str, *, project_name: str | None = None, readonly: bool = False) -> _BaseStateManager:
+def StateManager(project_dir: str, *, project_name: str | None = None, readonly: bool = False, domains: list[str] | None = None) -> _BaseStateManager:
     """Factory that returns the appropriate StateManager based on project.json storage setting."""
     global _duckdb_cls, _jsonl_cls
 
@@ -600,8 +600,8 @@ def StateManager(project_dir: str, *, project_name: str | None = None, readonly:
     if storage == "duckdb":
         if _duckdb_cls is None:
             _duckdb_cls = _build_duckdb_class()
-        return _duckdb_cls(project_dir, project_name=project_name, readonly=readonly)
+        return _duckdb_cls(project_dir, project_name=project_name, readonly=readonly, domains=domains)
 
     if _jsonl_cls is None:
         _jsonl_cls = _build_jsonl_class()
-    return _jsonl_cls(project_dir, project_name=project_name, readonly=readonly)
+    return _jsonl_cls(project_dir, project_name=project_name, readonly=readonly, domains=domains)

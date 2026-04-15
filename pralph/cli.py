@@ -46,7 +46,7 @@ def _resolve_prompt(flag_value: str | None, interactive_label: str, file_value: 
 def _get_state(ctx: click.Context, *, readonly: bool = False) -> StateManager:
     """Create a StateManager, exiting with a message if project is not initialized."""
     try:
-        return StateManager(ctx.obj["project_dir"], readonly=readonly)
+        return StateManager(ctx.obj["project_dir"], readonly=readonly, domains=ctx.obj.get("domains"))
     except ProjectNotInitializedError as e:
         click.echo(click.style(str(e), fg="red"))
         raise SystemExit(1)
@@ -141,7 +141,7 @@ def plan(ctx, name, prompt, prompt_file, reset):
         else:
             name = click.prompt("Project name (used as ID across sessions)")
 
-    state = StateManager(project_dir, project_name=name)
+    state = StateManager(project_dir, project_name=name, domains=ctx.obj.get("domains"))
     if reset:
         _reset_phase(state, "plan")
     # If .pralph/plan-prompt.md exists, don't require a CLI prompt
@@ -624,7 +624,13 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
 @click.pass_context
 def justloop(ctx, prompt_args, prompt):
     """Run a prompt in a loop until complete."""
-    state = _get_state(ctx)
+    project_dir = ctx.obj["project_dir"]
+    config_path = os.path.join(project_dir, ".pralph", "project.json")
+    if not os.path.exists(config_path):
+        name = os.path.basename(project_dir)
+    else:
+        name = None
+    state = StateManager(project_dir, project_name=name, domains=ctx.obj.get("domains"))
 
     # Resolve prompt: positional args > --prompt > stdin > interactive
     if prompt_args:
@@ -839,7 +845,7 @@ def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, ti
     # Handle --report mode — works with both backends
     if report:
         try:
-            state = StateManager(ctx.obj["project_dir"], readonly=True)
+            state = StateManager(ctx.obj["project_dir"], readonly=True, domains=ctx.obj.get("domains"))
         except ProjectNotInitializedError as e:
             click.echo(click.style(str(e), fg="red"))
             return
@@ -880,7 +886,7 @@ def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, ti
     # Run built-in queries via StateManager (works with both backends)
     if selected:
         try:
-            state = StateManager(ctx.obj["project_dir"], readonly=True)
+            state = StateManager(ctx.obj["project_dir"], readonly=True, domains=ctx.obj.get("domains"))
         except ProjectNotInitializedError as e:
             click.echo(click.style(str(e), fg="red"))
             return
