@@ -10,6 +10,7 @@
 - [Usage](#usage)
   - [Standard workflow](#standard-workflow)
   - [Adding stories later](#adding-stories-later)
+  - [Justloop](#justloop)
   - [Compound learning](#compound-learning)
   - [Exporting solutions](#exporting-solutions)
   - [Querying project data](#querying-project-data)
@@ -19,6 +20,7 @@
   - [Project state](#project-state)
 - [Story viewer](#story-viewer)
 - [Customization](#customization)
+  - [Configuration](#configuration)
   - [Additional prompt files](#additional-prompt-files)
   - [Prompt template overrides](#prompt-template-overrides)
 - [Acknowledgements](#acknowledgements)
@@ -68,6 +70,48 @@ Inspired by the [compound-engineering-plugin](https://github.com/EveryInc/compou
 - **`compound`** standalone command — ad-hoc capture from recent work
 
 Solutions are stored in `.pralph/solutions/` and automatically recalled during future plan and implement phases via keyword search.
+
+#### Global compound learning
+
+By default, solutions are scoped to the current project. Enable **global compound learning** to also save solutions to `~/.pralph/solutions/`, subdivided by auto-detected domain (e.g. `swift-ios`, `rust`, `docker`). This means learnings from one project automatically carry over to new projects in the same domain — no manual copying.
+
+To opt in, set `global_compound` in your config (see [Configuration](#configuration)):
+
+```json
+// ~/.pralph/config.json
+{
+  "global_compound": true
+}
+```
+
+**Recall is always global.** Even without `global_compound` enabled, plan and implement phases will search `~/.pralph/solutions/` for relevant learnings matching the project's detected domains. The setting only controls whether new solutions are *saved* globally.
+
+**Domain detection** is automatic — pralph scans project files to determine domains:
+
+| Files | Domain |
+|---|---|
+| `*.swift`, `Package.swift`, `*.xcodeproj` | `swift-ios` |
+| `Cargo.toml`, `*.rs` | `rust` |
+| `Dockerfile`, `docker-compose.yml` | `docker` |
+| `*.py`, `pyproject.toml` | `python` |
+| `*.ts`, `*.tsx`, `package.json` | `typescript` |
+| `*.go`, `go.mod` | `go` |
+| `*.tf` | `terraform` |
+| ... | (40+ rules for common languages/platforms) |
+
+A project can have multiple domains (e.g. a Rust service with Docker gets both `rust` and `docker` learnings). Override detection with `.pralph/domains.txt` (one domain per line) or the `--domain` CLI flag.
+
+```
+~/.pralph/solutions/
+  swift-ios/
+    index.jsonl
+    build-errors/
+    ui-bugs/
+  rust/
+    index.jsonl
+    build-errors/
+    runtime-errors/
+```
 
 ## Installation
 
@@ -131,13 +175,48 @@ pralph compound --prompt "Fixed CORS issue by adding middleware"
 pralph compound --story-id AUTH-001
 ```
 
+### Justloop
+
+A simple loop for running any prompt to completion without the full plan/stories/implement workflow. Give it a task and pralph handles the rest — it wraps the prompt with proper end conditions, runs it in a loop, and stops when Claude signals the task is done.
+
+```bash
+# Positional arguments
+pralph justloop "refactor the auth module to use JWT tokens"
+
+# Multi-word prompts work naturally
+pralph justloop fix all linting errors and update deprecated API calls
+
+# Via --prompt flag
+pralph justloop --prompt "add comprehensive test coverage for the utils module"
+
+# Piped from stdin
+gh issue view 42 --json body -q .body | pralph justloop
+
+# Reset and re-run
+pralph justloop --reset "migrate database schema to v2"
+```
+
+Each iteration has full tool access (Read, Write, Edit, Bash, Glob, Grep) and resume context from prior iterations. The loop terminates when Claude determines the task is fully complete, after 5 consecutive errors, or when max iterations is reached.
+
+**Tip: review-driven fix loop** — A powerful pattern is to first run Claude Code's `/review` command on your codebase and have it write the issues to a file, then let justloop work through them one by one:
+
+```bash
+# Step 1: In Claude Code, run /review and ask it to save issues to a markdown file
+#   e.g. "/review the codebase and write all issues to issues.md, ordered by severity"
+
+# Step 2: Let justloop fix them
+pralph justloop "Read issues.md. Pick the highest severity unresolved issue, fix it, then update issues.md to mark it as resolved."
+```
+
+Each iteration fixes one issue and updates the tracking file, giving you a clean audit trail. The loop stops when all issues are resolved.
+
 ### Compound learning
 
 Inspired by the [compound-engineering-plugin](https://github.com/EveryInc/compound-engineering-plugin), compound learning captures non-trivial solutions as structured documentation after each implementation.
 
 The value compounds over time. The first time Claude hits a tricky CORS config, it burns tokens researching. Document that solution, and the next project that needs CORS gets it right on the first iteration. Build errors, deployment quirks, library gotchas, auth patterns — every solution captured makes subsequent implementations faster, cheaper, and more reliable. Early runs are slow; later runs benefit from everything that came before.
 
-Solutions are stored in `.pralph/solutions/` and automatically recalled during future plan and implement phases via keyword search — no manual lookup needed.
+Solutions are stored in `.pralph/solutions/` and automatically recalled during future plan and implement phases via keyword search — no manual lookup needed. With [global compound learning](#global-compound-learning) enabled, solutions are also saved to `~/.pralph/solutions/{domain}/` and automatically recalled in new projects that share the same domain.
 
 ```bash
 # Auto-capture learnings after each successful story
@@ -214,6 +293,7 @@ echo "internationalization support" | pralph ideate
 echo "split into login and registration" | pralph refine -s AUTH-001
 echo "use vanilla JS" | pralph implement
 echo "Fixed CORS issue by adding middleware" | pralph compound
+echo "fix all linting errors" | pralph justloop
 
 # Compose with other tools
 cat requirements.txt | pralph plan --name myproject
@@ -232,6 +312,7 @@ Input is resolved in order: `--prompt` flag > `--prompt-file` > stdin pipe > int
 - `--project-dir` (default: `.`) — Target project directory
 - `--dangerously-skip-permissions` — Bypass Claude Code permission checks
 - `--extra-tools` — Additional MCP tools (comma-separated)
+- `--domain` (default: auto) — Override detected domains for global learning (repeatable)
 
 ### Command options
 
@@ -286,6 +367,15 @@ Accepts an optional positional instruction (e.g. `pralph refine -s AUTH-001 "spl
 - `--parallel` — Max concurrent stories (default: 1 = sequential)
 - `--reset` — Reset phase state and start fresh
 
+#### `justloop`
+
+Accepts the task as positional arguments (e.g. `pralph justloop fix all linting errors`).
+
+| Option | Default | Description |
+|---|---|---|
+| `--prompt` | — | Task prompt (alternative to positional args) |
+| `--reset` | off | Reset phase state and start fresh |
+
 #### `compound`
 
 - `--story-id` — Story ID to capture learnings from
@@ -332,7 +422,9 @@ Each project stores markdown artifacts in `.pralph/` within the project director
 
 **Local files** (in `.pralph/`):
 
-- `project.json` — Project identity (project_id)
+- `project.json` — Project identity (project_id, storage backend)
+- `config.json` — Project-level config overrides (optional)
+- `domains.txt` — Override auto-detected domains (optional)
 - `design-doc.md` — Design document (Phase 1)
 - `guardrails.md` — Coding standards and constraints
 - `review-feedback/` — Per-story review notes
@@ -350,6 +442,23 @@ Each project stores markdown artifacts in `.pralph/` within the project director
 - `solutions_index` — Searchable index of compound learning solutions
 
 All DuckDB tables are keyed by `project_id`, so multiple projects coexist in the same database. Existing projects that used JSONL files are automatically migrated to DuckDB on first access (originals backed up as `.bak` files).
+
+Global state lives in `~/.pralph/`:
+
+```
+~/.pralph/
+  config.json           # User-wide config defaults
+  prompts/              # User-wide prompt template overrides
+  solutions/            # Global compound learning (domain-scoped)
+    swift-ios/          # One directory per detected domain
+      index.jsonl
+      build-errors/
+      ui-bugs/
+    rust/
+      index.jsonl
+      runtime-errors/
+    ...
+```
 
 ## Story viewer
 
@@ -369,6 +478,23 @@ A dark-themed web UI for browsing and managing your story backlog. The viewer us
 <img src="docs/viewer-timeline.png" alt="Story viewer — timeline view with dependency arrows" width="800">
 
 ## Customization
+
+### Configuration
+
+pralph uses JSON config files for persistent settings. Config is resolved in order: project `.pralph/config.json` > user `~/.pralph/config.json` > defaults.
+
+```json
+// ~/.pralph/config.json
+{
+  "global_compound": true
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `global_compound` | `bool` | `false` | Save compound learnings to `~/.pralph/solutions/{domain}/` for cross-project reuse |
+
+Set user-wide defaults in `~/.pralph/config.json`. Override per-project in `.pralph/config.json` (e.g. disable global saving for a throwaway project).
 
 ### Additional prompt files
 
@@ -420,6 +546,7 @@ Available templates:
 - `implement-phase1-analyze.md` — Architecture-first grouping analysis
 - `implement-phase1.md` — Phase 1 batch implementation
 - `review.md` — Code review after implementation
+- `justloop.md` — Task execution prompt with completion signal
 - `compound.md` — Solution capture after implementation
 
 Templates use `{{variable}}` placeholders that are substituted at runtime (e.g. `{{design_doc}}`, `{{user_prompt}}`, `{{existing_stories}}`). Check the built-in defaults in `pralph/prompts/` to see which variables each template expects.

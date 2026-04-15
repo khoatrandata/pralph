@@ -8,7 +8,7 @@ import click
 
 from pralph import __version__
 from pralph.compound import run_compound
-from pralph.loop import run_add, run_ideate_loop, run_implement_loop, run_plan_loop, run_refine, run_stories_loop, run_webgen_loop
+from pralph.loop import run_add, run_ideate_loop, run_implement_loop, run_justloop, run_plan_loop, run_refine, run_stories_loop, run_webgen_loop
 from pralph.viewer import run_viewer
 from pralph.models import PhaseState, Story, StoryStatus
 from pralph.state import ProjectNotInitializedError, StateManager
@@ -72,7 +72,7 @@ class OrderedGroup(click.Group):
     SECTIONS = [
         ("Workflow", ["plan", "stories", "webgen", "implement"]),
         ("Replan", ["add", "ideate", "refine", "edit"]),
-        ("Tools", ["compound", "reset-errors", "viewer", "query"]),
+        ("Tools", ["justloop", "compound", "reset-errors", "viewer", "query"]),
     ]
 
     def list_commands(self, ctx):
@@ -101,9 +101,10 @@ class OrderedGroup(click.Group):
 @click.option("--project-dir", default=None, type=click.Path(exists=True), help="Target project dir [default: cwd]")
 @click.option("--dangerously-skip-permissions", is_flag=True, help="Pass permission bypass to claude")
 @click.option("--extra-tools", default=None, help="Additional tools to allow (comma-separated, e.g. mcp__db__query,mcp__api__call)")
+@click.option("--domain", multiple=True, help="Override detected domains (repeatable, e.g. --domain rust --domain docker)")
 @click.version_option(version=__version__)
 @click.pass_context
-def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_dir, dangerously_skip_permissions, extra_tools):
+def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_dir, dangerously_skip_permissions, extra_tools, domain):
     """pralph — Planned Ralph: multi-phase development workflow powered by Claude Code."""
     ctx.ensure_object(dict)
     ctx.obj["model"] = model
@@ -114,6 +115,7 @@ def main(ctx, model, max_iterations, max_budget_usd, cooldown, verbose, project_
     ctx.obj["project_dir"] = project_dir or os.getcwd()
     ctx.obj["dangerously_skip_permissions"] = dangerously_skip_permissions
     ctx.obj["extra_tools_cli"] = extra_tools or ""
+    ctx.obj["domains"] = list(domain) if domain else None
 
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
@@ -577,15 +579,18 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
             raise click.BadParameter(f"File not found: {prompt_file}", param_hint="'--prompt-file'")
         prompt = p.read_text().strip()
     prompt = prompt or _read_stdin() or ""
-
     # Parse comma-separated story IDs
     story_ids = [s.strip() for s in story_id.split(",") if s.strip()] if story_id else None
 
+    save_global = state.global_compound
     click.echo(f"pralph implement — max {ctx.obj['max_iterations']} iterations")
     click.echo(f"  project: {state.project_id}")
     click.echo(f"  model: {ctx.obj['model']}")
     click.echo(f"  review: {'on' if review else 'off'}")
     click.echo(f"  compound: {'on' if compound else 'off'}")
+    if compound and save_global:
+        domains = state.detect_domains()
+        click.echo(f"  global: on (domains: {', '.join(domains) or 'none detected'})")
     if parallel > 1:
         click.echo(f"  parallel: {parallel}")
     if story_ids:
@@ -603,12 +608,50 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
         phase1=phase1,
         review=review,
         compound=compound,
+        save_global=save_global,
         user_prompt=prompt,
         extra_tools=_get_extra_tools(ctx, state),
         verbose=ctx.obj["verbose"],
         dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
         max_budget_usd=ctx.obj["max_budget_usd"],
         parallel=parallel,
+    )
+
+
+@main.command()
+@click.argument("prompt_args", nargs=-1)
+@click.option("--prompt", default=None, help="Task prompt (prompted if omitted)")
+@click.pass_context
+def justloop(ctx, prompt_args, prompt):
+    """Run a prompt in a loop until complete."""
+    state = _get_state(ctx)
+
+    # Resolve prompt: positional args > --prompt > stdin > interactive
+    if prompt_args:
+        user_prompt = " ".join(prompt_args)
+    elif prompt:
+        user_prompt = prompt
+    else:
+        user_prompt = _resolve_prompt(None, "Task prompt")
+
+    # Always start fresh — justloop is a standalone tool, not a resumable phase
+    _reset_phase(state, "justloop")
+
+    click.echo(f"pralph justloop — max {ctx.obj['max_iterations']} iterations")
+    click.echo(f"  project: {ctx.obj['project_dir']}")
+    click.echo(f"  model: {ctx.obj['model']}")
+    click.echo(f"  prompt: {user_prompt}")
+
+    run_justloop(
+        state,
+        user_prompt=user_prompt,
+        model=ctx.obj["model"],
+        max_iterations=ctx.obj["max_iterations"],
+        cooldown=ctx.obj["cooldown"],
+        extra_tools=_get_extra_tools(ctx, state),
+        verbose=ctx.obj["verbose"],
+        dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
+        max_budget_usd=ctx.obj["max_budget_usd"],
     )
 
 
@@ -621,9 +664,13 @@ def compound(ctx, story_id, prompt, prompt_file):
     """Capture learnings from recent work (compound learning)."""
     prompt = _resolve_prompt(prompt, "Description of work done", file_value=prompt_file)
     state = _get_state(ctx)
+    save_global = state.global_compound
     click.echo(f"pralph compound")
     click.echo(f"  project: {state.project_id}")
     click.echo(f"  model: {ctx.obj['model']}")
+    if save_global:
+        domains = state.detect_domains()
+        click.echo(f"  global: on (domains: {', '.join(domains) or 'none detected'})")
     if story_id:
         click.echo(f"  story: {story_id}")
     if prompt:
@@ -637,6 +684,7 @@ def compound(ctx, story_id, prompt, prompt_file):
         verbose=ctx.obj["verbose"],
         dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
         max_budget_usd=ctx.obj["max_budget_usd"],
+        save_global=save_global,
     )
 
     click.echo(f"\n  Cost: ${cost:.4f}")

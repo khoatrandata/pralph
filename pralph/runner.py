@@ -54,6 +54,7 @@ COMPOUND_TOOLS = "Read,Glob,Grep,Bash"
 ADD_TOOLS = "Read,Glob,Grep"
 IDEATE_TOOLS = "Read,Glob,Grep,WebSearch,WebFetch"
 REFINE_TOOLS = "Read,Glob,Grep"
+JUSTLOOP_TOOLS = "Read,Write,Edit,Bash,Glob,Grep"
 
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 

@@ -50,6 +50,7 @@ def run_compound_capture(
     verbose: bool,
     dangerously_skip_permissions: bool,
     max_budget_usd: float | None,
+    save_global: bool = False,
 ) -> CompoundResult:
     """Run compound learning capture after a successful implementation. Returns result with cost and tokens."""
     click.echo(click.style(f"  Capturing learnings: {story.id}", fg='magenta', bold=True))
@@ -115,6 +116,13 @@ def run_compound_capture(
         path = state.save_solution(category, filename_slug, content, index_entry)
         click.echo(click.style(f"  + {title}", fg='green') + f" → {path}")
 
+        # Optionally save to global domain-scoped store
+        if save_global:
+            global_paths = state.save_solution_global(category, filename_slug, content, index_entry)
+            if global_paths:
+                domains = state.detect_domains()
+                click.echo(click.style(f"    ↑ global", fg='cyan') + f" [{', '.join(domains)}]")
+
     click.echo(click.style(f"  Captured {len(solutions)} solution(s)", fg='green', bold=True))
     return CompoundResult(cost_usd=result.cost_usd, **_token_kwargs(result))
 
@@ -128,6 +136,7 @@ def run_compound(
     verbose: bool = False,
     dangerously_skip_permissions: bool = False,
     max_budget_usd: float | None = None,
+    save_global: bool = False,
 ) -> float:
     """Standalone compound capture. Returns cost."""
     system_prompt = build_guardrails_system_prompt("implement", state)
@@ -153,5 +162,6 @@ def run_compound(
         verbose=verbose,
         dangerously_skip_permissions=dangerously_skip_permissions,
         max_budget_usd=max_budget_usd,
+        save_global=save_global,
     )
     return cr.cost_usd

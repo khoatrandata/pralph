@@ -84,6 +84,18 @@ def detect_completion_signal(text: str) -> bool:
     return False
 
 
+def detect_loop_complete(text: str) -> bool:
+    """Check for [LOOP_COMPLETE] signal.
+
+    Only matches if the signal appears on its own line.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "[LOOP_COMPLETE]":
+            return True
+    return False
+
+
 def detect_ideation_complete(text: str) -> bool:
     """Check for [IDEATION_COMPLETE] signal.
 

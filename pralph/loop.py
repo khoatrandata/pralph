@@ -12,6 +12,7 @@ from pralph.assembler import (
     assemble_add_prompt,
     assemble_ideate_prompt,
     assemble_implement_prompt,
+    assemble_justloop_prompt,
     assemble_phase1_analyze_prompt,
     assemble_plan_prompt,
     assemble_refine_prompt,
@@ -24,6 +25,7 @@ from pralph.parallel import FOUNDATION_CATEGORIES, sort_stories, run_parallel_im
 from pralph.parser import (
     detect_completion_signal,
     detect_ideation_complete,
+    detect_loop_complete,
     extract_json_from_text,
     parse_implement_output,
     parse_plan_output,
@@ -34,6 +36,7 @@ from pralph.runner import (
     ADD_TOOLS,
     IDEATE_TOOLS,
     IMPLEMENT_TOOLS,
+    JUSTLOOP_TOOLS,
     PLAN_TOOLS,
     REFINE_TOOLS,
     STORIES_TOOLS_EXTRACT,
@@ -157,7 +160,7 @@ def _run_loop(
 
     # Only truly "done" completions block re-running.
     # Everything else (errors, max_iterations) is resumable.
-    DONE_REASONS = {"generation_complete", "planning_complete", "all_stories_done", "single_story_done"}
+    DONE_REASONS = {"generation_complete", "planning_complete", "all_stories_done", "single_story_done", "loop_complete"}
 
     if ps.completed:
         if ps.completion_reason == "all_stories_done" and state.get_actionable_stories():
@@ -952,6 +955,7 @@ def run_implement_loop(
     phase1: bool = True,
     review: bool = True,
     compound: bool = False,
+    save_global: bool = False,
     user_prompt: str = "",
     extra_tools: str = "",
     verbose: bool = False,
@@ -995,7 +999,7 @@ def run_implement_loop(
             last_ps = _implement_single(
                 state, sid, model=model, system_prompt=system_prompt,
                 tools=tools, user_prompt=user_prompt, review=review,
-                compound=compound, verbose=verbose,
+                compound=compound, save_global=save_global, verbose=verbose,
                 dangerously_skip_permissions=dangerously_skip_permissions,
                 max_budget_usd=max_budget_usd,
             )
@@ -1095,8 +1099,11 @@ def run_implement_loop(
             group = data["phase_1_group"]
             reasoning = data.get("reasoning", {})
             click.echo(click.style(f"  Phase 1 group ({len(group)} stories):", fg='blue', bold=True) + f" {', '.join(group)}")
-            for sid, reason in reasoning.items():
-                click.echo(f"    {click.style(sid, fg='blue')}: {reason[:80]}")
+            if isinstance(reasoning, dict):
+                for sid, reason in reasoning.items():
+                    click.echo(f"    {click.style(sid, fg='blue')}: {reason[:80]}")
+            elif reasoning:
+                click.echo(f"    {str(reasoning)[:120]}")
 
             return IterationResult(
                 iteration=i, phase="implement", mode="phase1_analyze",
@@ -1223,6 +1230,7 @@ def run_implement_loop(
                 verbose=verbose,
                 dangerously_skip_permissions=dangerously_skip_permissions,
                 max_budget_usd=max_budget_usd,
+                save_global=save_global,
             )
             total_cost += compound_result.cost_usd
             total_input += compound_result.input_tokens
@@ -1356,6 +1364,7 @@ def _implement_single(
     user_prompt: str = "",
     review: bool = True,
     compound: bool = False,
+    save_global: bool = False,
     verbose: bool,
     dangerously_skip_permissions: bool,
     max_budget_usd: float | None,
@@ -1436,7 +1445,102 @@ def _implement_single(
             verbose=verbose,
             dangerously_skip_permissions=dangerously_skip_permissions,
             max_budget_usd=max_budget_usd,
+            save_global=save_global,
         )
 
     return PhaseState(phase="implement", completed=True, completion_reason="single_story_done")
 
+
+
+# ── Justloop ─────────────────────────────────────────────────────────
+
+
+def run_justloop(
+    state: StateManager,
+    *,
+    user_prompt: str,
+    model: str = "sonnet",
+    max_iterations: int = 50,
+    cooldown: int = 5,
+    extra_tools: str = "",
+    verbose: bool = False,
+    dangerously_skip_permissions: bool = False,
+    max_budget_usd: float | None = None,
+) -> PhaseState:
+    """Run a simple prompt loop until completion."""
+    import uuid
+
+    system_prompt = build_guardrails_system_prompt("implement", state)
+    tools = JUSTLOOP_TOOLS
+    if extra_tools:
+        tools = f"{tools},{extra_tools}"
+
+    def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
+        prompt = assemble_justloop_prompt(state, user_prompt=user_prompt, phase_state=ps)
+
+        sid = str(uuid.uuid4())
+        ps.active_session_id = sid
+        ps.active_session_started = datetime.now().isoformat()
+        state.save_phase_state(ps)
+
+        result = run_with_retry(
+            prompt,
+            model=model,
+            allowed_tools=tools,
+            system_prompt=system_prompt,
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            max_budget_usd=max_budget_usd,
+            timeout=1800,
+            verbose=verbose,
+            project_dir=str(state.project_dir),
+            session_id=sid,
+        )
+
+        _clear_session_tracking(ps)
+
+        if not result.success:
+            return IterationResult(
+                iteration=i, phase="justloop", mode="execute",
+                success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
+            )
+
+        return IterationResult(
+            iteration=i, phase="justloop", mode="execute",
+            success=True, raw_output=result.result,
+            cost_usd=result.cost_usd,
+            **_token_kwargs(result),
+        )
+
+    def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
+        result = run_with_retry(
+            "Continue where you left off.",
+            resume_session_id=session_id,
+            timeout=1800,
+            project_dir=str(state.project_dir),
+            dangerously_skip_permissions=dangerously_skip_permissions,
+            verbose=verbose,
+        )
+        if not result.success:
+            return IterationResult(
+                iteration=ps.current_iteration, phase="justloop", mode="resume",
+                success=False, error=result.error, cost_usd=result.cost_usd,
+                **_token_kwargs(result),
+            )
+        return IterationResult(
+            iteration=ps.current_iteration, phase="justloop", mode="resume",
+            success=True, raw_output=result.result,
+            cost_usd=result.cost_usd,
+            **_token_kwargs(result),
+        )
+
+    def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
+        if result.raw_output and detect_loop_complete(result.raw_output):
+            ps.completion_reason = "loop_complete"
+            return True
+        if ps.consecutive_errors >= 5:
+            ps.completion_reason = "consecutive_errors"
+            return True
+        return False
+
+    return _run_loop("justloop", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)

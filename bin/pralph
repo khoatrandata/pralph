@@ -28,4 +28,4 @@ if [[ ! -d "$VENV" ]]; then
     "$VENV/bin/pip" install --quiet -e "$PROJ_DIR"
 fi
 
-exec "$VENV/bin/python" -m pralph "$@"
+exec "$VENV/bin/python" -I -m pralph "$@"
