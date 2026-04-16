@@ -164,13 +164,14 @@ def get_connection() -> duckdb.DuckDBPyConnection:
     """
     global _schema_initialized
     _ensure_db_dir()
-    conn = duckdb.connect(str(_DB_PATH))
     if not _schema_initialized:
         with _schema_lock:
             if not _schema_initialized:
+                conn = duckdb.connect(str(_DB_PATH))
                 _ensure_schema(conn)
                 _schema_initialized = True
-    return conn
+                return conn
+    return duckdb.connect(str(_DB_PATH))
 
 
 @contextmanager
@@ -193,22 +194,49 @@ def get_readonly_connection() -> duckdb.DuckDBPyConnection:
 
     DuckDB doesn't allow concurrent connections (even read-only) when a write lock
     is held, so we snapshot the file to a temp copy and open that instead.
-    The caller should close the connection when done.
+    The caller should close the connection when done — the temp file is cleaned up
+    automatically when the connection is closed.
     """
     import shutil
     import tempfile
 
     if not _DB_PATH.exists():
         raise FileNotFoundError(f"Database not found: {_DB_PATH}")
-    # Copy to a temp file so we don't conflict with the writer
+
+    # Copy DB + WAL with consistency check: retry if DB changed during copy
     tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)
     tmp.close()
-    shutil.copy2(str(_DB_PATH), tmp.name)
-    # Also copy WAL file if it exists
+    tmp_path = tmp.name
+    tmp_wal = tmp_path + ".wal"
+
     wal_path = Path(str(_DB_PATH) + ".wal")
-    if wal_path.exists():
-        shutil.copy2(str(wal_path), tmp.name + ".wal")
-    return duckdb.connect(tmp.name, read_only=True)
+    for _attempt in range(3):
+        mtime_before = _DB_PATH.stat().st_mtime_ns
+        shutil.copy2(str(_DB_PATH), tmp_path)
+        if wal_path.exists():
+            shutil.copy2(str(wal_path), tmp_wal)
+        mtime_after = _DB_PATH.stat().st_mtime_ns
+        if mtime_before == mtime_after:
+            break  # consistent snapshot
+
+    conn = duckdb.connect(tmp_path, read_only=True)
+
+    # Clean up temp files when connection is closed
+    _original_close = conn.close
+
+    def _cleanup_close():
+        _original_close()
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            Path(tmp_wal).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    conn.close = _cleanup_close  # type: ignore[assignment]
+    return conn
 
 
 def register_project(conn: duckdb.DuckDBPyConnection, project_id: str, name: str) -> None:

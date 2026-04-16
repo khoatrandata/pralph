@@ -767,16 +767,17 @@ def reset_errors(ctx):
     # Reset error stories back to pending
     reset_stories = state.reset_error_stories()
 
-    # Clear error fields in the implement phase state
-    ps = state.load_phase_state("implement")
-    if ps.consecutive_errors > 0 or ps.last_error or ps.completion_reason in ("consecutive_errors", "error"):
-        ps.consecutive_errors = 0
-        ps.last_error = ""
-        if ps.completion_reason in ("consecutive_errors", "error"):
-            ps.completed = False
-            ps.completion_reason = ""
-        state.save_phase_state(ps)
-        click.echo(f"  Cleared 'implement' phase error state")
+    # Clear error fields in all phase states that have errors
+    for phase_name in ("plan", "stories", "webgen", "ideate", "implement", "justloop"):
+        ps = state.load_phase_state(phase_name)
+        if ps.consecutive_errors > 0 or ps.last_error or ps.completion_reason in ("consecutive_errors", "error"):
+            ps.consecutive_errors = 0
+            ps.last_error = ""
+            if ps.completion_reason in ("consecutive_errors", "error"):
+                ps.completed = False
+                ps.completion_reason = ""
+            state.save_phase_state(ps)
+            click.echo(f"  Cleared '{phase_name}' phase error state")
 
     if reset_stories:
         click.echo(click.style(f"  Reset {len(reset_stories)} stories to pending", fg='green'))
@@ -790,7 +791,7 @@ def reset_errors(ctx):
 @click.pass_context
 def viewer(ctx, port, no_open):
     """Browse and review user stories in a web UI."""
-    state = _get_state(ctx, readonly=True)
+    state = _get_state(ctx)
     stories = state.load_stories()
     if not stories:
         click.echo("No stories found. Run 'pralph stories' first.")
@@ -854,7 +855,7 @@ def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, ti
             while True:
                 state.refresh_readonly()
                 data = gather_report_data(state)
-                if watch:
+                if watch and fmt != "json":
                     click.echo("\033[2J\033[H", nl=False)
                 if fmt == "json":
                     click.echo(build_report_json(data))

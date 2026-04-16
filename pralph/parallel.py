@@ -1,6 +1,7 @@
 """Parallel implementation — run multiple stories concurrently with dependency ordering."""
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -146,6 +147,7 @@ def run_parallel_implement(
 
     in_flight: set[str] = set()
     total_cost = 0.0
+    cost_lock = threading.Lock()
     aborted = False
 
     def _implement_one_story(story: Story) -> tuple[Story, ClaudeResult, dict]:
@@ -286,7 +288,8 @@ def run_parallel_implement(
                         ))
                         continue
 
-                    total_cost += result.cost_usd
+                    with cost_lock:
+                        total_cost += result.cost_usd
 
                     if not result.success:
                         if result.error in ("interrupted", "aborted"):
@@ -378,7 +381,8 @@ def run_parallel_implement(
                         cache_read_input_tokens=iter_cache_read,
                         cache_creation_input_tokens=iter_cache_create,
                     ))
-                    ps.total_cost_usd += iter_cost
+                    with cost_lock:
+                        ps.total_cost_usd += iter_cost
 
                     if ps.consecutive_errors >= 5:
                         ps.completed = True

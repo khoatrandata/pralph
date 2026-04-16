@@ -174,13 +174,16 @@ def handle_interrupt(
     # When stdin is piped, redirect stdin to /dev/tty so click.prompt reads
     # from the terminal instead of the exhausted pipe.
     restore_stdin = None
+    tty_stdin = None
     if not sys.stdin.isatty():
         try:
+            tty_stdin = open("/dev/tty", "r")  # noqa: SIM115
             restore_stdin = sys.stdin
-            sys.stdin = open("/dev/tty", "r")  # noqa: SIM115
+            sys.stdin = tty_stdin
         except OSError:
-            sys.stdin = restore_stdin
-            restore_stdin = None
+            if tty_stdin is not None:
+                tty_stdin.close()
+            tty_stdin = None
 
     verbose_label = "Off" if verbose else "On"
 
@@ -200,8 +203,12 @@ def handle_interrupt(
         )
     finally:
         if restore_stdin is not None:
-            sys.stdin.close()
             sys.stdin = restore_stdin
+        if tty_stdin is not None:
+            try:
+                tty_stdin.close()
+            except OSError:
+                pass
 
     if choice == "5":
         verbose = not verbose

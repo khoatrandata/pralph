@@ -131,39 +131,56 @@ def _migrate_run_log(state_dir: Path, project_id: str, conn: duckdb.DuckDBPyConn
 
 
 def _migrate_phase_state(state_dir: Path, project_id: str, conn: duckdb.DuckDBPyConnection) -> None:
+    def _insert_phase(d: dict, path: Path | None = None) -> None:
+        if not isinstance(d, dict) or "phase" not in d:
+            return
+        conn.execute(
+            """INSERT OR REPLACE INTO phase_state
+               (project_id, phase, current_iteration, consecutive_empty,
+                consecutive_errors, completed, completion_reason, total_cost_usd,
+                last_error, last_summary, active_session_id, active_story_id,
+                active_session_started)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                project_id,
+                d["phase"],
+                d.get("current_iteration", 0),
+                d.get("consecutive_empty", 0),
+                d.get("consecutive_errors", 0),
+                d.get("completed", False),
+                d.get("completion_reason", ""),
+                d.get("total_cost_usd", 0.0),
+                d.get("last_error", ""),
+                d.get("last_summary", ""),
+                d.get("active_session_id", ""),
+                d.get("active_story_id", ""),
+                d.get("active_session_started", ""),
+            ],
+        )
+        if path is not None:
+            _backup(path)
+
+    # Migrate top-level phase-state.json
     path = state_dir / "phase-state.json"
-    if not path.exists():
-        return
-    try:
-        d = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return
-    if not isinstance(d, dict) or "phase" not in d:
-        return
-    conn.execute(
-        """INSERT OR REPLACE INTO phase_state
-           (project_id, phase, current_iteration, consecutive_empty,
-            consecutive_errors, completed, completion_reason, total_cost_usd,
-            last_error, last_summary, active_session_id, active_story_id,
-            active_session_started)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [
-            project_id,
-            d["phase"],
-            d.get("current_iteration", 0),
-            d.get("consecutive_empty", 0),
-            d.get("consecutive_errors", 0),
-            d.get("completed", False),
-            d.get("completion_reason", ""),
-            d.get("total_cost_usd", 0.0),
-            d.get("last_error", ""),
-            d.get("last_summary", ""),
-            d.get("active_session_id", ""),
-            d.get("active_story_id", ""),
-            d.get("active_session_started", ""),
-        ],
-    )
-    _backup(path)
+    if path.exists():
+        try:
+            d = json.loads(path.read_text())
+            _insert_phase(d, path)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Migrate per-phase files under phases/ (e.g. phases/implement.json)
+    phases_dir = state_dir / "phases"
+    if phases_dir.is_dir():
+        for phase_file in phases_dir.glob("*.json"):
+            try:
+                d = json.loads(phase_file.read_text())
+                if isinstance(d, dict) and "phase" not in d:
+                    # Infer phase name from filename
+                    d["phase"] = phase_file.stem
+                _insert_phase(d, phase_file)
+            except (json.JSONDecodeError, OSError):
+                continue
 
 
 def _migrate_phase1_analysis(state_dir: Path, project_id: str, conn: duckdb.DuckDBPyConnection) -> None:

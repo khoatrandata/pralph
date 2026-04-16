@@ -249,7 +249,7 @@ class _BaseStateManager(FileStateMixin):
         return (
             (self.state_dir / "stories.jsonl").exists()
             or (self.state_dir / "phase-state.json").exists()
-            or self.design_doc_path.exists()
+            or (self.state_dir / "design-doc.md").exists()
         )
 
     def _save_project_config(self, project_id: str, storage: str | None = None) -> None:

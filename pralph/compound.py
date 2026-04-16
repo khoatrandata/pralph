@@ -102,6 +102,7 @@ def run_compound_capture(
                 parts.append(f"## Related Files\n\n{files}\n")
             content = "\n".join(parts)
 
+        category = _slugify(category) or "general"
         filename_slug = _slugify(title) + ".md"
         index_entry = {
             "filename": f"{category}/{filename_slug}",

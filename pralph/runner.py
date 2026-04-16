@@ -504,7 +504,7 @@ def run_with_retry(
 
         if result.error == "timeout" and attempt == 0:
             original_timeout = kwargs.get("timeout", 600)
-            kwargs["timeout"] = original_timeout * 2
+            kwargs["timeout"] = min(original_timeout * 2, 3600)
             kwargs.pop("session_id", None)  # avoid "already in use" on retry
             print(f"  [retry] timeout — retrying with {kwargs['timeout']}s", file=sys.stderr)
             continue
@@ -748,7 +748,7 @@ def run_with_retry_parallel(
 
         if result.error == "timeout" and attempt == 0:
             original_timeout = kwargs.get("timeout", 600)
-            kwargs["timeout"] = original_timeout * 2
+            kwargs["timeout"] = min(original_timeout * 2, 3600)
             with process_group.print_lock:
                 print(f"  [{story_id}] [retry] timeout — retrying with {kwargs['timeout']}s", file=sys.stderr)
             continue

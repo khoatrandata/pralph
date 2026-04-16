@@ -824,7 +824,7 @@ function renderDashboard() {
   if (d.active_story) {
     const s = d.stories[d.active_story] || {};
     const sc2 = d.story_costs[d.active_story] || {};
-    activeHtml = `<strong>${d.active_story}</strong> — ${esc(s.title||'')}`;
+    activeHtml = `<strong>${esc(d.active_story)}</strong> — ${esc(s.title||'')}`;
     if (sc2.cost_usd) activeHtml += ` · ${fmtCost(sc2.cost_usd)} · ${sc2.iterations||0} iters`;
   } else if (d.current_phase && d.current_phase.completed) {
     activeHtml = '<span style="color:var(--green)">All work completed</span>';
@@ -908,8 +908,8 @@ function renderSolutionsList() {
     </div>
   `).join('');
   if (filtered.length === 0) list.innerHTML = '<div style="padding:20px;color:var(--muted);text-align:center">No solutions found</div>';
-  list.querySelectorAll('.sol-item').forEach(el => {
-    el.addEventListener('click', () => selectSolution(el.dataset.fn));
+  list.querySelectorAll('.sol-item').forEach((el, i) => {
+    el.addEventListener('click', () => selectSolution(filtered[i].filename));
   });
 }
 
