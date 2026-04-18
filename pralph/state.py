@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -147,12 +149,71 @@ def _infer_solution_domains(
     return matched & all_domains_set
 
 
+def _infer_domains_llm(
+    *,
+    content: str,
+    title: str,
+    category: str,
+    tags: list[str],
+    error_signature: str,
+    available_domains: list[str],
+) -> set[str]:
+    """Ask Haiku to infer domain(s) from solution content.
+
+    Returns the subset of *available_domains* that match, or an empty set on
+    failure (caller should fall back to all domains).
+    """
+    from pralph.parser import extract_json_from_text
+    from pralph.prompts.compact import INFER_DOMAIN_PROMPT
+    from pralph.runner import run_with_retry
+
+    prompt = INFER_DOMAIN_PROMPT
+    prompt = prompt.replace("{{available_domains}}", ", ".join(available_domains))
+    prompt = prompt.replace("{{title}}", title)
+    prompt = prompt.replace("{{category}}", category)
+    prompt = prompt.replace("{{tags}}", ", ".join(tags))
+    prompt = prompt.replace("{{error_signature}}", error_signature or "(none)")
+    # Cap content to avoid blowing context for a cheap inference call
+    truncated = content[:4000] if len(content) > 4000 else content
+    prompt = prompt.replace("{{content}}", truncated)
+
+    result = run_with_retry(prompt, model="haiku", timeout=30, max_retries=1)
+    if not result.success:
+        return set()
+
+    parsed = extract_json_from_text(result.result)
+    if not isinstance(parsed, dict) or "domains" not in parsed:
+        return set()
+
+    domains_set = set(available_domains)
+    return {d for d in parsed["domains"] if isinstance(d, str) and d in domains_set}
+
+
 def _safe_resolve(base: Path, untrusted: str) -> Path | None:
     """Resolve *untrusted* relative to *base*, returning None if it escapes."""
     resolved = (base / untrusted).resolve()
     if not resolved.is_relative_to(base.resolve()):
         return None
     return resolved
+
+
+@contextmanager
+def _index_lock(index_path: Path):
+    """Acquire an exclusive file lock next to *index_path*.
+
+    Both solution saves and index compaction use this lock so that compaction
+    blocks new writes and vice-versa.  The lock is blocking (waits until
+    released).
+    """
+    lock_path = index_path.with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = lock_path.open("w")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
 
 
 class StateManager:
@@ -645,12 +706,14 @@ class StateManager:
         solution_path = _safe_resolve(self.solutions_dir, f"{category}/{filename}")
         if solution_path is None:
             raise ValueError(f"Invalid solution path: {category}/{filename}")
-        solution_path.parent.mkdir(parents=True, exist_ok=True)
-        solution_path.write_text(content)
 
-        # Append index entry
-        with open(self.solutions_index_path, "a") as f:
-            f.write(json.dumps(index_entry) + "\n")
+        with _index_lock(self.solutions_index_path):
+            solution_path.parent.mkdir(parents=True, exist_ok=True)
+            solution_path.write_text(content)
+
+            # Append index entry
+            with open(self.solutions_index_path, "a") as f:
+                f.write(json.dumps(index_entry) + "\n")
 
         return solution_path
 
@@ -717,8 +780,8 @@ class StateManager:
         """Save a solution to ~/.pralph/solutions/{domain}/ for relevant detected domains.
 
         Uses heuristics (related_files, tags, error_signature) to infer which
-        domain(s) a solution applies to.  Falls back to all detected domains
-        when no signal is available.
+        domain(s) a solution applies to.  Falls back to Haiku LLM inference when
+        heuristics return nothing.
 
         The index_entry is augmented with source_project for traceability.
         Returns list of paths written.
@@ -733,6 +796,15 @@ class StateManager:
             index_entry.get("error_signature", ""),
             all_domains,
         )
+        if not inferred:
+            inferred = _infer_domains_llm(
+                content=content,
+                title=index_entry.get("title", ""),
+                category=index_entry.get("category", ""),
+                tags=index_entry.get("tags", []),
+                error_signature=index_entry.get("error_signature", ""),
+                available_domains=all_domains,
+            )
         domains = inferred if inferred else set(all_domains)
 
         entry = {
@@ -746,12 +818,14 @@ class StateManager:
             solution_path = _safe_resolve(domain_dir, f"{category}/{filename}")
             if solution_path is None:
                 continue
-            solution_path.parent.mkdir(parents=True, exist_ok=True)
-            solution_path.write_text(content)
 
             idx_path = self._global_domain_index_path(domain)
-            with open(idx_path, "a") as f:
-                f.write(json.dumps(entry) + "\n")
+            with _index_lock(idx_path):
+                solution_path.parent.mkdir(parents=True, exist_ok=True)
+                solution_path.write_text(content)
+
+                with open(idx_path, "a") as f:
+                    f.write(json.dumps(entry) + "\n")
 
             paths.append(solution_path)
 
@@ -883,14 +957,32 @@ class StateManager:
 
     # -- index compaction --
 
-    def compact_local_index(self) -> dict:
-        """Compact the project-local solutions index: deduplicate and prune orphans.
+    def compact_local_index(
+        self,
+        *,
+        model: str = "haiku",
+        verbose: bool = False,
+        dangerously_skip_permissions: bool = False,
+    ) -> dict:
+        """Compact the project-local solutions index using an LLM to merge duplicates.
 
-        Returns stats dict with counts of original, kept, duplicates, orphans.
+        Returns stats dict with original, kept, merged, removed counts and cost.
         """
-        return self._compact_index(self.solutions_index_path, self.solutions_dir)
+        return self._compact_index(
+            self.solutions_index_path,
+            self.solutions_dir,
+            model=model,
+            verbose=verbose,
+            dangerously_skip_permissions=dangerously_skip_permissions,
+        )
 
-    def compact_global_indexes(self) -> list[dict]:
+    def compact_global_indexes(
+        self,
+        *,
+        model: str = "haiku",
+        verbose: bool = False,
+        dangerously_skip_permissions: bool = False,
+    ) -> list[dict]:
         """Compact global solution indexes for all detected domains.
 
         Returns a list of stats dicts, one per domain.
@@ -900,59 +992,230 @@ class StateManager:
             idx_path = self._global_domain_index_path(domain)
             if not idx_path.exists():
                 continue
-            stats = self._compact_index(idx_path, self._global_domain_solutions_dir(domain))
+            stats = self._compact_index(
+                idx_path,
+                self._global_domain_solutions_dir(domain),
+                model=model,
+                verbose=verbose,
+                dangerously_skip_permissions=dangerously_skip_permissions,
+            )
             stats["domain"] = domain
             results.append(stats)
         return results
 
     @staticmethod
-    def _compact_index(index_path: Path, solutions_base: Path) -> dict:
-        """Deduplicate an index.jsonl by filename (keep latest) and prune entries with missing files.
+    def _compact_index(
+        index_path: Path,
+        solutions_base: Path,
+        *,
+        model: str = "haiku",
+        verbose: bool = False,
+        dangerously_skip_permissions: bool = False,
+    ) -> dict:
+        """Use an LLM to semantically merge duplicate solutions and prune orphans.
 
-        Rewrites index_path in place. Returns stats.
+        Acquires an exclusive lock so concurrent saves wait until compaction
+        finishes, and only one compaction runs at a time.  Rewrites index and
+        solution files atomically.  Returns stats.
         """
+        import re as _re
+
+        from pralph.parser import extract_json_from_text
+        from pralph.prompts.compact import COMPACT_INDEX_PROMPT
+        from pralph.runner import run_with_retry
+
         if not index_path.exists():
-            return {"original": 0, "kept": 0, "duplicates": 0, "orphans": 0}
+            return {"original": 0, "kept": 0, "merged": 0, "removed": 0, "cost": 0.0}
 
-        raw_lines = index_path.read_text().splitlines()
-        entries: list[dict] = []
-        for line in raw_lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-                if isinstance(parsed, dict):
-                    entries.append(parsed)
-            except json.JSONDecodeError:
-                continue
+        with _index_lock(index_path):
+            # -- read current state under lock --
+            raw_lines = index_path.read_text().splitlines()
+            entries: list[dict] = []
+            for line in raw_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        entries.append(parsed)
+                except json.JSONDecodeError:
+                    continue
 
-        original = len(entries)
+            if not entries:
+                return {"original": 0, "kept": 0, "merged": 0, "removed": 0, "cost": 0.0}
 
-        # Deduplicate by filename, keeping the last occurrence (most recent append)
-        seen: dict[str, int] = {}
-        for i, entry in enumerate(entries):
-            seen[entry.get("filename", "")] = i
-        deduped = [entries[i] for i in sorted(seen.values())]
-        duplicates = original - len(deduped)
+            original = len(entries)
 
-        # Prune entries whose solution file no longer exists
-        kept: list[dict] = []
-        orphans = 0
-        for entry in deduped:
-            filename = entry.get("filename", "")
-            if not filename:
-                orphans += 1
-                continue
-            solution_path = _safe_resolve(solutions_base, filename)
-            if solution_path is not None and solution_path.exists():
-                kept.append(entry)
-            else:
-                orphans += 1
+            # Pre-prune exact filename duplicates (keep last) and orphans
+            # to reduce what we send to the LLM
+            seen: dict[str, int] = {}
+            for i, entry in enumerate(entries):
+                seen[entry.get("filename", "")] = i
+            deduped = [entries[i] for i in sorted(seen.values())]
+            exact_dupes = original - len(deduped)
 
-        # Rewrite index
-        with open(index_path, "w") as f:
-            for entry in kept:
-                f.write(json.dumps(entry) + "\n")
+            valid: list[dict] = []
+            pre_orphans = 0
+            for entry in deduped:
+                filename = entry.get("filename", "")
+                if not filename:
+                    pre_orphans += 1
+                    continue
+                solution_path = _safe_resolve(solutions_base, filename)
+                if solution_path is not None and solution_path.exists():
+                    valid.append(entry)
+                else:
+                    pre_orphans += 1
 
-        return {"original": original, "kept": len(kept), "duplicates": duplicates, "orphans": orphans}
+            if len(valid) <= 1:
+                # Nothing to merge — just rewrite the cleaned index
+                tmp_path = index_path.with_suffix(".tmp")
+                with open(tmp_path, "w") as f:
+                    for entry in valid:
+                        f.write(json.dumps(entry) + "\n")
+                os.replace(tmp_path, index_path)
+                return {
+                    "original": original,
+                    "kept": len(valid),
+                    "merged": 0,
+                    "removed": exact_dupes + pre_orphans,
+                    "cost": 0.0,
+                }
+
+            # -- build prompt with index + solution contents --
+            index_json = json.dumps(valid, indent=2)
+
+            contents_parts: list[str] = []
+            for entry in valid:
+                filename = entry.get("filename", "")
+                path = _safe_resolve(solutions_base, filename)
+                if path is not None and path.exists():
+                    body = path.read_text().strip()
+                    # Cap per-file to avoid blowing context
+                    if len(body) > 3000:
+                        body = body[:3000] + "\n\n(truncated)"
+                    contents_parts.append(f"### {filename}\n\n{body}")
+
+            contents_text = "\n\n---\n\n".join(contents_parts)
+
+            prompt = COMPACT_INDEX_PROMPT
+            prompt = prompt.replace("{{index_entries}}", index_json)
+            prompt = prompt.replace("{{solution_contents}}", contents_text)
+
+            # -- call LLM --
+            result = run_with_retry(
+                prompt,
+                model=model,
+                timeout=120,
+                verbose=verbose,
+                dangerously_skip_permissions=dangerously_skip_permissions,
+            )
+
+            cost = result.cost_usd
+
+            if not result.success:
+                # LLM failed — fall back to the pre-pruned state (still useful)
+                tmp_path = index_path.with_suffix(".tmp")
+                with open(tmp_path, "w") as f:
+                    for entry in valid:
+                        f.write(json.dumps(entry) + "\n")
+                os.replace(tmp_path, index_path)
+                return {
+                    "original": original,
+                    "kept": len(valid),
+                    "merged": 0,
+                    "removed": exact_dupes + pre_orphans,
+                    "cost": cost,
+                }
+
+            # -- parse LLM response --
+            parsed = extract_json_from_text(result.result)
+            if not isinstance(parsed, dict) or "entries" not in parsed:
+                # Bad parse — keep pre-pruned state
+                tmp_path = index_path.with_suffix(".tmp")
+                with open(tmp_path, "w") as f:
+                    for entry in valid:
+                        f.write(json.dumps(entry) + "\n")
+                os.replace(tmp_path, index_path)
+                return {
+                    "original": original,
+                    "kept": len(valid),
+                    "merged": 0,
+                    "removed": exact_dupes + pre_orphans,
+                    "cost": cost,
+                }
+
+            new_entries = parsed["entries"]
+            merges = parsed.get("merges", [])
+            removed = parsed.get("removed", [])
+
+            # -- slugify helper (inline to keep static) --
+            def _slugify(text: str) -> str:
+                slug = text.lower().strip()
+                slug = _re.sub(r"[^\w\s-]", "", slug)
+                slug = _re.sub(r"[\s_]+", "-", slug)
+                slug = _re.sub(r"-+", "-", slug)
+                return slug[:80].strip("-")
+
+            # -- write merged solution files + rebuild index --
+            old_filenames = {e.get("filename", "") for e in valid}
+            new_filenames: set[str] = set()
+            final_entries: list[dict] = []
+
+            for entry in new_entries:
+                if not isinstance(entry, dict):
+                    continue
+                content = entry.pop("content", "")
+                filename = entry.get("filename", "")
+
+                # Generate filename from title if missing or changed
+                if not filename:
+                    category = entry.get("category", "misc")
+                    title = entry.get("title", "untitled")
+                    filename = f"{category}/{_slugify(title)}.md"
+                    entry["filename"] = filename
+
+                resolved = _safe_resolve(solutions_base, filename)
+                if resolved is None:
+                    continue
+
+                if content:
+                    resolved.parent.mkdir(parents=True, exist_ok=True)
+                    resolved.write_text(content)
+
+                new_filenames.add(filename)
+                final_entries.append(entry)
+
+            # Clean up files that were merged away
+            merged_sources: set[str] = set()
+            for merge in merges:
+                if isinstance(merge, dict):
+                    for src in merge.get("sources", []):
+                        merged_sources.add(src)
+
+            removed_filenames: set[str] = set()
+            for rem in removed:
+                if isinstance(rem, dict):
+                    removed_filenames.add(rem.get("filename", ""))
+
+            for old_fn in (merged_sources | removed_filenames) - new_filenames:
+                if old_fn:
+                    old_path = _safe_resolve(solutions_base, old_fn)
+                    if old_path is not None and old_path.exists():
+                        old_path.unlink()
+
+            # Atomic index rewrite
+            tmp_path = index_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
+                for entry in final_entries:
+                    f.write(json.dumps(entry) + "\n")
+            os.replace(tmp_path, index_path)
+
+        return {
+            "original": original,
+            "kept": len(final_entries),
+            "merged": len(merges),
+            "removed": exact_dupes + pre_orphans + len(removed),
+            "cost": cost,
+        }

@@ -12,6 +12,7 @@
   - [Adding stories later](#adding-stories-later)
   - [Justloop](#justloop)
   - [Compound learning](#compound-learning)
+  - [Index compaction](#index-compaction)
   - [Piping from stdin](#piping-from-stdin)
   - [Global options](#global-options)
   - [Command options](#command-options)
@@ -96,6 +97,26 @@ To opt in, set `global_compound` in your config (see [Configuration](#configurat
 | ... | (40+ rules for common languages/platforms) |
 
 A project can have multiple domains (e.g. a Rust service with Docker gets both `rust` and `docker` learnings). Override detection with `.pralph/domains.txt` (one domain per line) or the `--domain` CLI flag.
+
+**Domain inference for global saves** — When saving a solution globally, pralph determines which domain(s) it belongs to using a three-tier fallback:
+
+1. **Heuristics** (free, instant) — matches related files, tags, and error signatures against known patterns
+2. **Haiku LLM** (cheap, ~1s) — if heuristics return nothing, asks Haiku to infer domains from the solution content
+3. **All domains** (fallback) — only if both above fail, broadcasts to all detected domains
+
+This prevents a Python-specific fix from polluting the `rust` or `docker` indexes.
+
+#### Index compaction
+
+Over time, solution indexes accumulate duplicates (re-captured solutions) and near-duplicates (same problem solved slightly differently across projects). The `compact-index` command uses Haiku to semantically merge them:
+
+```bash
+pralph compact-index              # compact local + global indexes
+pralph compact-index --local-only  # only compact project-local index
+pralph compact-index --global-only # only compact global indexes
+```
+
+Compaction sends all solution entries and their content to Haiku, which identifies near-duplicates, merges them into single comprehensive documents, and removes stale entries. Merged files are written back and superseded files are cleaned up. The process is locked — concurrent solution saves wait until compaction finishes, and only one compaction can run at a time.
 
 ```
 ~/.pralph/solutions/
@@ -328,6 +349,15 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 | `--story-id` | — | Story ID to capture learnings from |
 | `--prompt` | — | Description of what was done |
 
+#### `compact-index`
+
+| Option | Default | Description |
+|---|---|---|
+| `--global-only` | off | Only compact global indexes |
+| `--local-only` | off | Only compact project-local index |
+
+Uses Haiku to semantically merge duplicate solutions and prune orphans. See [Index compaction](#index-compaction).
+
 #### `reset-errors`
 
 No options. Resets all stories with `error` status back to `pending` and clears the current phase's error state (`consecutive_errors`, `last_error`, and `completion_reason` if the phase was stopped due to errors). This unblocks a phase that halted after hitting too many consecutive errors.
@@ -473,6 +503,7 @@ Use project-level overrides to tailor behavior for a specific project, or home-l
 | `review.md` | Implement | Code review after implementation |
 | `justloop.md` | Justloop | Task execution prompt with completion signal |
 | `compound.md` | Compound | Solution capture after implementation |
+| `compact.md` | Compact | Semantic merging of duplicate solutions |
 
 Templates use `{{variable}}` placeholders that are substituted at runtime (e.g. `{{design_doc}}`, `{{user_prompt}}`, `{{existing_stories}}`). Check the built-in defaults in `pralph/prompts/` to see which variables each template expects.
 
