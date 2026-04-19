@@ -10,7 +10,7 @@ from pralph.models import Story
 def extract_json_from_text(text: str) -> Any | None:
     """Multi-strategy JSON extraction from text.
 
-    Tries: direct parse → ```json``` blocks → first balanced {}.
+    Tries: direct parse → outer markdown fence unwrap → ```json``` blocks → first balanced {}.
     """
     text = text.strip()
 
@@ -19,6 +19,31 @@ def extract_json_from_text(text: str) -> Any | None:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
+
+    # Strategy 1b: outer markdown fence unwrap.
+    # Trust the OUTERMOST ``` pair (first ``` to last ```) and walk to the
+    # first `{` or `[` inside. This sidesteps the non-greedy regex failing
+    # when the JSON's string values contain nested ```lang code fences
+    # (common in compound capture `content` fields).
+    first_fence = text.find("```")
+    if first_fence >= 0:
+        end_fence = text.rfind("```")
+        if end_fence > first_fence:
+            inner = text[first_fence + 3 : end_fence]
+            # Drop optional language tag on the first line (e.g. "json\n").
+            nl = inner.find("\n")
+            if nl >= 0 and inner[:nl].strip().lower() in ("", "json"):
+                inner = inner[nl + 1 :]
+            brace = inner.find("{")
+            bracket = inner.find("[")
+            starts = [p for p in (brace, bracket) if p >= 0]
+            if starts:
+                start = min(starts)
+                try:
+                    obj, _ = json.JSONDecoder().raw_decode(inner[start:])
+                    return obj
+                except json.JSONDecodeError:
+                    pass
 
     # Strategy 2: ```json ... ``` fenced blocks
     pattern = r"```(?:json)?\s*\n?(.*?)```"
