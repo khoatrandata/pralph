@@ -72,7 +72,7 @@ class OrderedGroup(click.Group):
     SECTIONS = [
         ("Workflow", ["plan", "stories", "webgen", "implement"]),
         ("Replan", ["add", "ideate", "refine", "edit"]),
-        ("Tools", ["justloop", "compound", "reset-errors", "viewer", "query"]),
+        ("Tools", ["justloop", "compound", "compact-index", "reset-errors", "viewer", "query"]),
     ]
 
     def list_commands(self, ctx):
@@ -744,6 +744,77 @@ def export_solutions(ctx, output, category, fmt):
         click.echo(f"Exported {len(entries)} solution(s) to {output}")
     else:
         click.echo(text)
+
+
+@main.command("compact-index")
+@click.option("--global-only", is_flag=True, help="Only compact global indexes")
+@click.option("--local-only", is_flag=True, help="Only compact project-local index")
+@click.pass_context
+def compact_index(ctx, global_only, local_only):
+    """Compact solution indexes: merge duplicates via Haiku and prune orphans."""
+    state = StateManager(ctx.obj["project_dir"], domains=ctx.obj.get("domains"))
+    model = "haiku"
+    verbose = ctx.obj.get("verbose", False)
+    dangerously_skip_permissions = ctx.obj.get("dangerously_skip_permissions", False)
+    click.echo(f"pralph compact-index")
+    click.echo(f"  project: {ctx.obj['project_dir']}")
+    click.echo(f"  model: {model}")
+
+    compact_kwargs = dict(
+        model=model,
+        verbose=verbose,
+        dangerously_skip_permissions=dangerously_skip_permissions,
+    )
+
+    total_merged = 0
+    total_removed = 0
+    total_cost = 0.0
+
+    # Local index
+    if not global_only:
+        if state.solutions_index_path.exists():
+            stats = state.compact_local_index(**compact_kwargs)
+            total_merged += stats["merged"]
+            total_removed += stats["removed"]
+            total_cost += stats.get("cost", 0.0)
+            changed = stats["merged"] + stats["removed"]
+            if changed:
+                click.echo(click.style(f"  local: {stats['original']} → {stats['kept']}", fg='green')
+                           + f" ({stats['merged']} merged, {stats['removed']} removed)")
+            else:
+                click.echo(f"  local: {stats['kept']} entries (clean)")
+        else:
+            click.echo("  local: no index")
+
+    # Global indexes
+    if not local_only:
+        domains = state.detect_domains()
+        if domains:
+            results = state.compact_global_indexes(**compact_kwargs)
+            if results:
+                for stats in results:
+                    domain = stats["domain"]
+                    total_merged += stats["merged"]
+                    total_removed += stats["removed"]
+                    total_cost += stats.get("cost", 0.0)
+                    changed = stats["merged"] + stats["removed"]
+                    if changed:
+                        click.echo(click.style(f"  global/{domain}: {stats['original']} → {stats['kept']}", fg='green')
+                                   + f" ({stats['merged']} merged, {stats['removed']} removed)")
+                    else:
+                        click.echo(f"  global/{domain}: {stats['kept']} entries (clean)")
+            else:
+                click.echo("  global: no indexes found")
+        else:
+            click.echo("  global: no domains detected")
+
+    total = total_merged + total_removed
+    if total:
+        click.echo(click.style(f"\n  Compacted: {total_merged} merged, {total_removed} removed", fg='green', bold=True))
+    else:
+        click.echo(click.style("\n  All indexes clean", fg='green'))
+    if total_cost > 0:
+        click.echo(f"  Cost: ${total_cost:.4f}")
 
 
 @main.command("reset-errors")

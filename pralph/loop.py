@@ -102,6 +102,14 @@ def _clear_session_tracking(ps: PhaseState) -> None:
     ps.active_session_started = ""
 
 
+def _suggest_compact(state: StateManager) -> None:
+    """Print a hint to run compact-index if solutions exist."""
+    if state.has_solutions() or state.has_global_solutions():
+        click.echo(click.style("\n  Tip:", dim=True) + click.style(" run ", dim=True)
+                   + click.style("pralph compact-index", fg='cyan')
+                   + click.style(" to deduplicate & prune solution indexes", dim=True))
+
+
 # ── generic iteration loop ───────────────────────────────────────────
 
 
@@ -221,6 +229,7 @@ def _run_loop(
             ps.completed = True
             state.save_phase_state(ps)
             click.echo(click.style(f"\n  Phase '{phase}' complete: {ps.completion_reason}", fg='green'))
+            _suggest_compact(state)
             return ps
 
         state.save_phase_state(ps)
@@ -232,6 +241,7 @@ def _run_loop(
     ps.completion_reason = "max_iterations"
     state.save_phase_state(ps)
     click.echo(click.style(f"\n  Phase '{phase}' complete: max iterations reached", fg='yellow'))
+    _suggest_compact(state)
     return ps
 
 
@@ -1448,6 +1458,7 @@ def _implement_single(
             save_global=save_global,
         )
 
+    _suggest_compact(state)
     return PhaseState(phase="implement", completed=True, completion_reason="single_story_done")
 
 
