@@ -222,6 +222,25 @@ class ProjectNotInitializedError(Exception):
     pass
 
 
+def detect_branch_ticket(project_dir: str | Path) -> str | None:
+    """Extract a ticket ID (e.g., EFF-50) from the current git branch name."""
+    import re
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, cwd=str(project_dir), timeout=5,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+            match = re.search(r"([A-Z]+-\d+)", branch, re.IGNORECASE)
+            if match:
+                return match.group(1).upper()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 class _BaseStateManager(FileStateMixin):
     """Base class with shared init logic — no storage mixin yet."""
 
@@ -366,6 +385,14 @@ class _BaseStateManager(FileStateMixin):
                 data = json.loads(self._project_config_path.read_text())
                 stored_id = data.get("project_id", "")
                 if stored_id:
+                    branch_ticket = detect_branch_ticket(self.project_dir)
+                    if branch_ticket and branch_ticket != stored_id.upper():
+                        import sys
+                        print(
+                            f"  ⚠ project_id '{stored_id}' does not match branch ticket '{branch_ticket}'. "
+                            f"Update .pralph/project.json or pass --name {branch_ticket}",
+                            file=sys.stderr,
+                        )
                     return stored_id
             except (json.JSONDecodeError, OSError):
                 pass

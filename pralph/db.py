@@ -189,7 +189,26 @@ def connection():
         conn.close()
 
 
-def get_readonly_connection() -> duckdb.DuckDBPyConnection:
+class _CleanupConnection:
+    """Proxy that delegates to a real DuckDB connection and cleans up temp files on close."""
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection, paths: list[str]):
+        self._conn = conn
+        self._paths = paths
+
+    def close(self) -> None:
+        self._conn.close()
+        for p in self._paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
+def get_readonly_connection() -> _CleanupConnection:
     """Return a read-only DuckDB connection that works even while another process writes.
 
     DuckDB doesn't allow concurrent connections (even read-only) when a write lock
@@ -220,23 +239,7 @@ def get_readonly_connection() -> duckdb.DuckDBPyConnection:
             break  # consistent snapshot
 
     conn = duckdb.connect(tmp_path, read_only=True)
-
-    # Clean up temp files when connection is closed
-    _original_close = conn.close
-
-    def _cleanup_close():
-        _original_close()
-        try:
-            Path(tmp_path).unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            Path(tmp_wal).unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    conn.close = _cleanup_close  # type: ignore[assignment]
-    return conn
+    return _CleanupConnection(conn, [tmp_path, tmp_wal])
 
 
 def register_project(conn: duckdb.DuckDBPyConnection, project_id: str, name: str) -> None:

@@ -11,7 +11,7 @@ from pralph.compound import run_compound
 from pralph.loop import run_add, run_ideate_loop, run_implement_loop, run_justloop, run_plan_loop, run_refine, run_stories_loop, run_webgen_loop
 from pralph.viewer import run_viewer
 from pralph.models import PhaseState, Story, StoryStatus
-from pralph.state import ProjectNotInitializedError, StateManager
+from pralph.state import ProjectNotInitializedError, StateManager, detect_branch_ticket
 from pralph.report import (
     BUILTIN_QUERIES, gather_report_data, read_project_id, read_storage_backend,
     run_builtin_query,
@@ -132,14 +132,15 @@ def plan(ctx, name, prompt, prompt_file, reset):
     project_dir = ctx.obj["project_dir"]
     config_path = os.path.join(project_dir, ".pralph", "project.json")
 
-    # On first run, require --name or derive from directory name or prompt for it
+    # On first run, require --name or derive from branch ticket / directory name
     if not os.path.exists(config_path) and not name:
-        # Default to directory name if stdin is not a TTY (non-interactive)
+        branch_ticket = detect_branch_ticket(project_dir)
         if not sys.stdin.isatty():
-            name = os.path.basename(project_dir)
+            name = branch_ticket or os.path.basename(project_dir)
             click.echo(f"  Auto-derived project name: {name}")
         else:
-            name = click.prompt("Project name (used as ID across sessions)")
+            default = branch_ticket or os.path.basename(project_dir)
+            name = click.prompt("Project name (used as ID across sessions)", default=default)
 
     state = StateManager(project_dir, project_name=name, domains=ctx.obj.get("domains"))
     if reset:
@@ -627,7 +628,7 @@ def justloop(ctx, prompt_args, prompt):
     project_dir = ctx.obj["project_dir"]
     config_path = os.path.join(project_dir, ".pralph", "project.json")
     if not os.path.exists(config_path):
-        name = os.path.basename(project_dir)
+        name = detect_branch_ticket(project_dir) or os.path.basename(project_dir)
     else:
         name = None
     state = StateManager(project_dir, project_name=name, domains=ctx.obj.get("domains"))
