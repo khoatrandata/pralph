@@ -205,6 +205,46 @@ def run_builtin_query(name: str, state) -> tuple[list[str], list[tuple]]:
     return [], []
 
 
+def _compute_health(
+    story_costs: dict[str, dict],
+    status_counts: dict[str, int],
+    current_phase: dict,
+) -> dict[str, str]:
+    """Derive a one-word health label + short reason from story outcomes."""
+    implemented = status_counts.get("implemented", 0)
+    rework = status_counts.get("rework", 0)
+    error = status_counts.get("error", 0)
+    pending = status_counts.get("pending", 0)
+    in_progress = status_counts.get("in_progress", 0)
+    total_attempted = implemented + rework + error
+    consec_errors = current_phase.get("consecutive_errors", 0)
+
+    # Count how many stories needed >1 iteration (rework cycles)
+    multi_iter = sum(1 for sc in story_costs.values() if sc["iterations"] > 1)
+
+    if consec_errors >= 3:
+        return {"label": "stuck", "reason": f"{consec_errors} consecutive errors"}
+    if total_attempted == 0:
+        if in_progress:
+            return {"label": "starting", "reason": "first story in progress"}
+        return {"label": "idle", "reason": "no stories attempted yet"}
+    if error > 0 and error >= implemented:
+        return {"label": "struggling", "reason": f"{error} errors vs {implemented} implemented"}
+    if rework > 1 and rework > implemented:
+        return {"label": "struggling", "reason": f"{rework} stories in rework, only {implemented} implemented"}
+    if consec_errors >= 2:
+        return {"label": "wobbling", "reason": f"{consec_errors} consecutive errors"}
+    if rework >= 1 and multi_iter > total_attempted / 2:
+        return {"label": "grinding", "reason": f"{multi_iter}/{total_attempted} stories needed multiple iterations"}
+
+    first_pass = sum(1 for sc in story_costs.values() if sc["iterations"] == 1 and sc["statuses"] and sc["statuses"][-1] == "implemented")
+    if total_attempted >= 3 and first_pass == total_attempted:
+        return {"label": "cruising", "reason": f"{first_pass}/{total_attempted} stories landed first try"}
+    if implemented > 0 and error == 0 and rework <= 1:
+        return {"label": "cruising", "reason": f"{implemented} implemented, {rework} rework, 0 errors"}
+    return {"label": "progressing", "reason": f"{implemented} done, {rework} rework, {error} errors"}
+
+
 def gather_report_data(state) -> dict:
     """Gather all data needed for the progress report.
 
@@ -272,6 +312,9 @@ def gather_report_data(state) -> dict:
     avg_cost = sum(sc["cost_usd"] for sc in story_costs.values()) / max(implemented, 1) if story_costs else 0
     avg_duration = sum(sc["duration"] for sc in story_costs.values()) / max(implemented, 1) if story_costs else 0
 
+    # Health assessment
+    health = _compute_health(story_costs, status_counts, current_phase)
+
     return {
         "phase_states": phase_states,
         "current_phase": current_phase,
@@ -283,6 +326,7 @@ def gather_report_data(state) -> dict:
         "active_story": active_story,
         "last_entry": last_entry,
         "grand_total_cost": round(sum(phase_costs.values()), 4),
+        "health": health,
         "projection": {
             "implemented": implemented,
             "remaining": pending,
@@ -387,6 +431,18 @@ def print_report(data: dict) -> None:
         click.echo(f"\n  Last result: {last_summary[:200]}")
     if last_error:
         click.echo(f"  Last error:  {last_error[:200]}")
+
+    health = data.get("health", {})
+    if health:
+        label = health.get("label", "unknown")
+        reason = health.get("reason", "")
+        color_map = {
+            "cruising": "green", "progressing": "cyan", "starting": "cyan",
+            "grinding": "yellow", "wobbling": "yellow",
+            "struggling": "red", "stuck": "red", "idle": "white",
+        }
+        color = color_map.get(label, "white")
+        click.echo(f"\n  Health:      {click.style(label, fg=color, bold=True)} — {reason}")
 
     click.echo()
     click.echo("-" * 60)
@@ -505,6 +561,7 @@ def build_report_json(data: dict) -> str:
         "current_phase": data["current_phase"],
         "story_summary": data["status_counts"],
         "total_stories": sum(data["status_counts"].values()),
+        "health": data.get("health", {}),
         "cost_by_phase": {k: round(v, 2) for k, v in data["phase_costs"].items()},
         "grand_total_cost": round(sum(data["phase_costs"].values()), 2),
         "total_duration_seconds": round(data["total_duration"], 1),
