@@ -75,6 +75,7 @@ Return your findings as JSON:
 - **ONLY reference story IDs** that:
   1. Exist in "Previously Generated Stories" above, OR
   2. Are other stories in THIS batch you're generating
+- **Do NOT reference IDs from other projects.** The "Previously Generated Stories" list above is the ONLY source of existing IDs for this project. If that list is empty, your first stories must have NO dependencies (or depend only on other stories in this same batch).
 - If a dependency hasn't been created yet, note it in acceptance_criteria instead
 
 ## Guidelines

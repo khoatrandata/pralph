@@ -189,6 +189,27 @@ def parse_stories_output(text: str) -> tuple[list[Story], bool]:
     return stories, is_complete
 
 
+def reconcile_dependencies(
+    stories: list[Story],
+    existing_ids: set[str],
+) -> list[str]:
+    """Strip dependencies that don't exist in the project.
+
+    Returns list of removed dependency strings for logging.
+    Valid targets are existing_ids (already in DB for this project)
+    plus the IDs of the stories in this batch.
+    """
+    batch_ids = {s.id for s in stories}
+    valid_ids = existing_ids | batch_ids
+    removed: list[str] = []
+    for s in stories:
+        bad = [d for d in s.dependencies if d not in valid_ids]
+        if bad:
+            removed.extend(f"{s.id}->{d}" for d in bad)
+            s.dependencies = [d for d in s.dependencies if d in valid_ids]
+    return removed
+
+
 def parse_implement_output(text: str) -> dict[str, Any]:
     """Parse implementation phase output — extract status JSON."""
     data = extract_json_from_text(text)

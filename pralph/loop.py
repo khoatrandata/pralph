@@ -30,6 +30,7 @@ from pralph.parser import (
     parse_implement_output,
     parse_plan_output,
     parse_stories_output,
+    reconcile_dependencies,
 )
 from pralph.review import run_review
 from pralph.runner import (
@@ -407,6 +408,11 @@ def run_stories_loop(
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
 
+        # Strip dependencies pointing to other projects
+        removed = reconcile_dependencies(new_stories, existing_ids)
+        if removed:
+            click.echo(click.style(f"  ⚠ stripped {len(removed)} cross-project deps:", fg='yellow') + f" {', '.join(removed[:5])}")
+
         if new_stories:
             _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
@@ -436,6 +442,7 @@ def run_stories_loop(
         stories, _ = parse_stories_output(result.result)
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
+        reconcile_dependencies(new_stories, existing_ids)
         if new_stories:
             _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
@@ -529,13 +536,16 @@ def run_add(
         ))
         return None
 
+    # Strip dependencies pointing to other projects
+    existing_ids = state.get_story_ids()
+    reconcile_dependencies(stories, existing_ids)
+
     story = stories[0]
     story.source = "manual"
     if is_next:
         story.priority = 1
 
     # Dedup check
-    existing_ids = state.get_story_ids()
     if story.id in existing_ids:
         # Append suffix to avoid collision
         base = story.id
@@ -612,8 +622,9 @@ def run_refine(
         s.source = "refine"
         s.metadata["refined_from"] = original_ids
 
-    # Dedup IDs against existing
+    # Strip dependencies pointing to other projects and dedup IDs
     existing_ids = state.get_story_ids()
+    reconcile_dependencies(stories, existing_ids)
     for s in stories:
         if s.id in existing_ids:
             base = s.id
@@ -701,6 +712,9 @@ def run_ideate_loop(
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
 
+        # Strip dependencies pointing to other projects
+        reconcile_dependencies(new_stories, existing_ids)
+
         if new_stories:
             _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
@@ -739,6 +753,7 @@ def run_ideate_loop(
             s.source = "ideate"
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
+        reconcile_dependencies(new_stories, existing_ids)
         if new_stories:
             _stamp_session(new_stories, result.session_id)
             state.append_stories(new_stories)
@@ -830,6 +845,9 @@ def run_webgen_loop(
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
 
+        # Strip dependencies pointing to other projects
+        reconcile_dependencies(new_stories, existing_ids)
+
         if new_stories:
             for s in new_stories:
                 s.source = "webgen"
@@ -868,6 +886,7 @@ def run_webgen_loop(
         stories, _ = parse_stories_output(result.result)
         existing_ids = state.get_story_ids()
         new_stories = [s for s in stories if s.id not in existing_ids]
+        reconcile_dependencies(new_stories, existing_ids)
         if new_stories:
             for s in new_stories:
                 s.source = "webgen"
