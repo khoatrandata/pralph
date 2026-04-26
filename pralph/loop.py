@@ -924,6 +924,47 @@ def run_webgen_loop(
 # ── Phase 3: Implement ───────────────────────────────────────────────
 
 
+def _is_output_token_overflow(error: str) -> bool:
+    """Detect if the error is a Claude output token limit exceeded."""
+    return "exceeded" in error and "output token" in error
+
+
+def _auto_refine_on_overflow(
+    state: StateManager,
+    story: Story,
+    model: str,
+    verbose: bool,
+    dangerously_skip_permissions: bool,
+    max_budget_usd: float | None,
+) -> list[Story] | None:
+    """Auto-refine a story that hit the output token limit into smaller pieces.
+
+    Returns the new stories if successful, None if refine fails.
+    """
+    click.echo(click.style(f"  ↻ output token overflow on {story.id} — auto-splitting into smaller stories", fg='yellow', bold=True))
+    instruction = (
+        f"This story is too large for a single implementation pass. "
+        f"Split it into 2-3 smaller stories that can each be implemented independently. "
+        f"Each sub-story should produce less code output. "
+        f"Preserve the original acceptance criteria across the split."
+    )
+    new_stories = run_refine(
+        state,
+        instruction=instruction,
+        original_stories=[story],
+        model=model,
+        verbose=verbose,
+        dangerously_skip_permissions=dangerously_skip_permissions,
+        max_budget_usd=max_budget_usd,
+    )
+    if new_stories:
+        click.echo(click.style(f"  ✓ split into {len(new_stories)} sub-stories:", fg='green'))
+        for s in new_stories:
+            click.echo(f"    {click.style(s.id, fg='blue')}: {s.title}")
+        return new_stories
+    return None
+
+
 def _resolve_story_ids(
     state: StateManager,
     story_ids: list[str],
@@ -1195,6 +1236,20 @@ def run_implement_loop(
                     cost_usd=result.cost_usd, story_id=story.id,
                     **_token_kwargs(result),
                 )
+            if _is_output_token_overflow(result.error):
+                new_stories = _auto_refine_on_overflow(
+                    state, story, model=model, verbose=verbose,
+                    dangerously_skip_permissions=dangerously_skip_permissions,
+                    max_budget_usd=max_budget_usd,
+                )
+                if new_stories:
+                    story_queue.clear()
+                    return IterationResult(
+                        iteration=i, phase="implement", mode="implement",
+                        success=True, impl_status="refined",
+                        cost_usd=result.cost_usd, story_id=story.id,
+                        **_token_kwargs(result),
+                    )
             state.mark_story_status(
                 story.id, StoryStatus.error, summary=result.error[:200],
                 error_reason=result.error, error_output=result.result or "",
