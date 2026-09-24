@@ -6,7 +6,7 @@ VENV="$PROJ_DIR/.venv"
 
 # --- Find a suitable Python (>=3.10) ---
 PYTHON=""
-for p in python3.13 python3.12 python3.11 python3; do
+for p in python3.11 python3.13 python3.12 python3; do
     if command -v "$p" &>/dev/null; then
         PYTHON="$p"
         break

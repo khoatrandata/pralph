@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "pralph"
+version = "0.1.2"
+description = "Plan-driven autonomous loop runner for Claude Code"
+authors = ["InDebted Efficiency <efficiency@indebted.co>"]
+readme = "README.md"
+packages = [{include = "pralph"}]
+include = [{path = "pralph/viewer.html", format = ["sdist", "wheel"]}]
+exclude = ["tests/"]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+click = ">=8.0"
+duckdb = ">=1.0"
+tenacity = ">=8.0"
+
+[tool.poetry.dev-dependencies]
+pytest = ">=8.0"
+
+[tool.poetry.scripts]
+pralph = "pralph.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
