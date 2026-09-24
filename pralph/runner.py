@@ -107,6 +107,7 @@ def run_claude(
         session_id = session_id or str(uuid.uuid4())
         cmd = [
             "claude", "-p", "--verbose", "--model", model,
+            "--effort", "high",
             "--output-format", "stream-json", "--session-id", session_id,
         ]
 
@@ -556,6 +557,7 @@ def run_claude_parallel(
     session_id = session_id or uuid.uuid4().hex[:8]
     cmd = [
         "claude", "-p", "--verbose", "--model", model,
+        "--effort", "high",
         "--output-format", "stream-json", "--session-id", session_id,
     ]
 
