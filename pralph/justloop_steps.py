@@ -80,13 +80,14 @@ def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: in
     return ""
 
 
-def stop_message(ps: PhaseState, reason: str) -> str:
+def stop_message(ps: PhaseState, reason: str, plan_content: str | None = None) -> str:
     """Human-readable explanation of a step stop, naming the step and blocker."""
     rec = ps.steps.get(ps.last_step, StepRecord())
+    label = _short_step_label(ps.last_step, plan_content)
     if reason == "repeated_blocker":
-        return f"step '{ps.last_step}' hit the same blocker twice: {rec.last_blocker}"
+        return f"{label} hit the same blocker twice: {rec.last_blocker}"
     if reason == "step_attempts_exhausted":
-        msg = f"step '{ps.last_step}' not finished after {rec.attempts} attempts (last status: {rec.last_status})"
+        msg = f"{label} not finished after {rec.attempts} attempts (last status: {rec.last_status})"
         if rec.last_blocker:
             msg += f": {rec.last_blocker}"
         return msg
@@ -108,6 +109,16 @@ def seed_carried_blocker(ps: PhaseState, step: str, blocker: str) -> None:
     rec = ps.steps.setdefault(step_key(step), StepRecord())
     rec.prior_blocker = blocker
     rec.prior_signature = blocker_signature(blocker)
+
+
+def _short_step_label(key: str, plan_content: str | None) -> str:
+    """'step 3' when the plan file has the step, else the step text cut to 60 chars."""
+    if plan_content is not None:
+        found = planfile.find_step(plan_content, key)
+        if found:
+            return f"step {found.number}"
+    text = key if len(key) <= 60 else key[:57] + "..."
+    return f"step '{text}'"
 
 
 def _step_label(key: str, plan_content: str | None) -> str:

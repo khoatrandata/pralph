@@ -1583,13 +1583,23 @@ def _justloop_iteration_result(
 
     if plan_path:
         errors = []
+        # Number the note by step so later iterations can match notes to steps
+        found = None
+        try:
+            found = planfile.find_step(planfile.read_plan(plan_path), typed.step) if typed.step else None
+        except OSError:
+            pass
         if typed.status == "done":
             try:
                 planfile.tick_step(plan_path, typed.step)
             except (planfile.PlanFileError, OSError) as e:
                 errors.append(f"plan_file: {e}")
         try:
-            planfile.append_note(plan_path, typed.note)
+            if found and typed.note:
+                suffix = "" if typed.status == "done" else f" ({typed.status})"
+                planfile.append_note(plan_path, f"Step {found.number}{suffix}: {typed.note}")
+            else:
+                planfile.append_note(plan_path, typed.note)
         except OSError as e:
             errors.append(f"plan_file: {e}")
         if errors:
@@ -1711,7 +1721,7 @@ def run_justloop(
         stop = steps.record_step_result(ps, result, max_step_attempts)
         if stop:
             ps.completion_reason = stop
-            ps.last_error = steps.stop_message(ps, stop)[:500]
+            ps.last_error = steps.stop_message(ps, stop, _plan_content())[:500]
             click.echo(click.style(f"  ✗ stopping: {ps.last_error}", fg="red", bold=True))
             return True
         if not result.status and result.raw_output and detect_loop_complete(result.raw_output):

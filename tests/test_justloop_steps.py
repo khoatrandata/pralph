@@ -98,6 +98,15 @@ class TestRecordStepResult:
         assert js.record_step_result(ps, _ir("blocked", step="build it", blocker="x"), 5) == "repeated_blocker"
 
 
+def test_stop_message_without_plan_truncates_step():
+    ps = PhaseState(phase="justloop")
+    long_step = "- [ ] " + "x" * 100
+    js.record_step_result(ps, _ir("blocked", step=long_step, blocker="b"), 5)
+    js.record_step_result(ps, _ir("blocked", step=long_step, blocker="b"), 5)
+    msg = js.stop_message(ps, "repeated_blocker")
+    assert msg == "step '" + "x" * 57 + "...' hit the same blocker twice: b"
+
+
 class TestStepContext:
     PLAN = "## Steps\n\n- [x] one\n- [ ] two\n  - [ ] sub\n- [ ] three\n"
 
@@ -196,7 +205,7 @@ class TestSimulatedLoop:
         assert len(calls) == 2
         assert ps.completion_reason == "repeated_blocker"
         out = capsys.readouterr().out
-        assert "step 'two' hit the same blocker twice: timeout after 29s" in out
+        assert "step 2 hit the same blocker twice: timeout after 29s" in out
         assert "attempt 2 of 3" in calls[1]
         assert "Last attempt was blocked: timeout after 31s" in calls[1]
 

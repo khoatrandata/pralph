@@ -208,17 +208,18 @@ class TestIterationResult:
         ir = loop._justloop_iteration_result(1, "execute", _cr(typed), str(plan))
         content = plan.read_text()
         assert "- [x] Add tests for the parser" in content
-        assert "- Parser added; tests in tests/test_parser.py\n" in content
+        assert "- Step 3: Parser added; tests in tests/test_parser.py\n" in content
         assert ir.success and ir.error == ""
 
     def test_not_done_appends_note_without_tick(self, tmp_path):
         plan = tmp_path / "plan.md"
         plan.write_text(PLAN)
-        typed = dict(TYPED, status="blocked", blocker="permission denied", note="Blocked on write")
+        typed = dict(TYPED, step="- [ ] Add tests for the parser", status="blocked",
+                     blocker="permission denied", note="Blocked on write")
         loop._justloop_iteration_result(1, "execute", _cr(typed), str(plan))
         content = plan.read_text()
         assert content.count("[x]") == 1
-        assert "- Blocked on write" in content
+        assert "- Step 3 (blocked): Blocked on write" in content
 
     def test_missing_step_is_recorded_error(self, tmp_path):
         plan = tmp_path / "plan.md"
@@ -284,7 +285,7 @@ class TestRunJustloop:
         ps, calls = _run_justloop(jsonl_state, monkeypatch, results, plan_file=".pralph/loop-plan.md")
         assert ps.completion_reason == "loop_complete"
         assert len(calls) == 2
-        assert plan.read_text() == "## Steps\n\n- [x] one\n- [x] two\n\n## Progress notes\n\n- did one\n- did two\n"
+        assert plan.read_text() == "## Steps\n\n- [x] one\n- [x] two\n\n## Progress notes\n\n- Step 1: did one\n- Step 2: did two\n"
         assert ".pralph/loop-plan.md" in calls[0]["prompt"]
         assert "Do NOT tick checklist boxes" in calls[0]["prompt"]
 
