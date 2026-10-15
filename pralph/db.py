@@ -96,6 +96,7 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             step TEXT DEFAULT '',
             "commit" TEXT DEFAULT '',
             blocker TEXT DEFAULT '',
+            step_number INTEGER DEFAULT 0,
             logged_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
@@ -106,6 +107,10 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             conn.execute(f'SELECT "{col}" FROM run_log LIMIT 0')
         except Exception:
             conn.execute(f'ALTER TABLE run_log ADD COLUMN "{col}" TEXT DEFAULT \'\'')
+    try:
+        conn.execute("SELECT step_number FROM run_log LIMIT 0")
+    except Exception:
+        conn.execute("ALTER TABLE run_log ADD COLUMN step_number INTEGER DEFAULT 0")
 
 
     conn.execute("""

@@ -221,6 +221,15 @@ class TestIterationResult:
         assert content.count("[x]") == 1
         assert "- Step 3 (blocked): Blocked on write" in content
 
+    def test_duplicate_text_done_numbers_the_ticked_step(self, tmp_path):
+        plan = tmp_path / "plan.md"
+        plan.write_text(PLAN.replace("- [ ] Add tests\n  -", "- [x] Add tests\n  -", 1))
+        ir = loop._justloop_iteration_result(1, "execute", _cr(dict(TYPED, step="- [ ] Add tests")), str(plan))
+        assert ir.step_number == 4
+        content = plan.read_text()
+        assert "- Step 4: Parser added" in content
+        assert content.count("\n- [x] Add tests\n") == 2
+
     def test_missing_step_is_recorded_error(self, tmp_path):
         plan = tmp_path / "plan.md"
         plan.write_text(PLAN)
@@ -306,10 +315,11 @@ class TestRunJustloop:
 def test_duckdb_run_log_carries_typed_fields(duckdb_state):
     duckdb_state.log_iteration(IterationResult(
         iteration=1, phase="justloop", mode="execute", success=True,
-        status="blocked", step="- [ ] a", commit="abc", blocker="boom",
+        status="blocked", step="- [ ] a", commit="abc", blocker="boom", step_number=2,
     ))
     row = duckdb_state.load_run_log()[-1]
-    assert (row["status"], row["step"], row["commit"], row["blocker"]) == ("blocked", "- [ ] a", "abc", "boom")
+    assert (row["status"], row["step"], row["commit"], row["blocker"], row["step_number"]) == (
+        "blocked", "- [ ] a", "abc", "boom", 2)
 
 
 def test_duckdb_migration_adds_typed_columns():
@@ -321,4 +331,4 @@ def test_duckdb_migration_adds_typed_columns():
     conn.execute("CREATE TABLE run_log (project_id TEXT NOT NULL, iteration INTEGER, logged_at TIMESTAMP)")
     _ensure_schema(conn)
     cols = {r[0] for r in conn.execute("DESCRIBE run_log").fetchall()}
-    assert {"session_id", "status", "step", "commit", "blocker"} <= cols
+    assert {"session_id", "status", "step", "commit", "blocker", "step_number"} <= cols

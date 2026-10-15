@@ -1587,11 +1587,13 @@ def _justloop_iteration_result(
             content = planfile.read_plan(plan_path)
         except OSError:
             content = None
-        # Number the note by step so later iterations can match notes to steps
+        # Resolve the reported line to its numbered step (for notes and step records)
         found = planfile.find_step(content, typed.step) if content is not None and typed.step else None
         if typed.status == "done":
             try:
-                planfile.tick_step(plan_path, typed.step)
+                idx = planfile.tick_step(plan_path, typed.step)
+                # The ticked line is authoritative when steps share text
+                found = planfile.step_at_line(content, idx) if content is not None else None
             except (planfile.PlanFileError, OSError) as e:
                 errors.append(f"plan_file: {e}")
                 # Nothing was ticked: count this as an unfinished attempt on the
@@ -1599,6 +1601,8 @@ def _justloop_iteration_result(
                 nxt = planfile.next_step(content) if content is not None else None
                 if nxt is not None:
                     ir.status, ir.step, found = "in_progress", nxt.line, nxt
+        if found is not None:
+            ir.step_number = found.number
         try:
             if found and typed.note:
                 suffix = "" if ir.status == "done" else f" ({ir.status})"
@@ -1726,7 +1730,7 @@ def run_justloop(
         stop = steps.record_step_result(ps, result, max_step_attempts)
         if stop:
             ps.completion_reason = stop
-            ps.last_error = steps.stop_message(ps, stop, _plan_content())[:500]
+            ps.last_error = steps.stop_message(ps, stop)[:500]
             click.echo(click.style(f"  ✗ stopping: {ps.last_error}", fg="red", bold=True))
             return True
         if not result.status and result.raw_output and detect_loop_complete(result.raw_output):

@@ -107,6 +107,19 @@ def test_stop_message_without_plan_truncates_step():
     assert msg == "step '" + "x" * 57 + "...' hit the same blocker twice: b"
 
 
+def test_numbered_steps_with_same_text_keep_separate_records():
+    ps = PhaseState(phase="justloop")
+    ir = _ir("blocked", step="- [ ] Add tests", blocker="b")
+    ir.step_number = 2
+    js.record_step_result(ps, ir, 5)
+    ir4 = _ir("blocked", step="- [ ] Add tests", blocker="b")
+    ir4.step_number = 4
+    assert js.record_step_result(ps, ir4, 5) == ""
+    assert set(ps.steps) == {"#2 Add tests", "#4 Add tests"}
+    assert js.record_step_result(ps, ir4, 5) == "repeated_blocker"
+    assert js.stop_message(ps, "repeated_blocker") == "step 4 hit the same blocker twice: b"
+
+
 class TestStepContext:
     PLAN = "## Steps\n\n- [x] one\n- [ ] two\n  - [ ] sub\n- [ ] three\n"
 
@@ -117,15 +130,15 @@ class TestStepContext:
         assert header == "step 2, attempt 1/3"
 
     def test_after_blocked_attempt(self):
-        ps = PhaseState(phase="justloop", steps={"two": StepRecord(attempts=1, last_status="blocked",
-                                                                   last_blocker="no access")})
+        ps = PhaseState(phase="justloop", steps={"#2 two": StepRecord(attempts=1, last_status="blocked",
+                                                                      last_blocker="no access")})
         text, _ = js.build_step_context(ps, 3, self.PLAN)
         assert "attempt 2 of 3" in text
         assert "Last attempt was blocked: no access" in text
 
     def test_prior_run_blocker(self):
         ps = PhaseState(phase="justloop")
-        js.seed_carried_blocker(ps, "- [ ] two", "no access")
+        js.seed_carried_blocker(ps, "#2 two", "no access")
         text, _ = js.build_step_context(ps, 3, self.PLAN)
         assert "The previous run stopped on step 2 with: no access" in text
 
@@ -245,6 +258,34 @@ class TestSimulatedLoop:
         ps, calls = _run(jsonl_state, monkeypatch, [_cr("nothing_left", step="")])
         assert len(calls) == 1
         assert ps.completion_reason == "loop_complete"
+
+
+class TestDuplicateStepText:
+    PLAN = "## Steps\n\n- [ ] Add tests\n- [ ] other\n- [ ] Add tests\n\n## Progress notes\n"
+
+    def test_notes_numbers_and_attempts_follow_the_right_step(self, jsonl_state, monkeypatch, capsys):
+        plan = jsonl_state.project_dir / "loop-plan.md"
+        plan.write_text(self.PLAN)
+        results = [
+            _cr("blocked", step="- [ ] Add tests", blocker="flaky"),
+            _cr("done", step="- [ ] Add tests"),
+            _cr("done", step="- [ ] other"),
+            _cr("blocked", step="- [ ] Add tests", blocker="disk full"),
+            _cr("blocked", step="- [ ] Add tests", blocker="disk full"),
+        ]
+        ps, calls = _run(jsonl_state, monkeypatch, results, plan_file="loop-plan.md")
+        # Step 3 starts fresh even though step 1 shares its text
+        assert "step 3, attempt 1 of 3" in calls[3]
+        assert ps.completion_reason == "repeated_blocker"
+        assert "step 3 hit the same blocker twice: disk full" in capsys.readouterr().out
+        notes = plan.read_text().split("## Progress notes")[1]
+        assert notes.splitlines()[2:] == [
+            "- Step 1 (blocked): blocked flaky",
+            "- Step 1: done",
+            "- Step 2: done",
+            "- Step 3 (blocked): blocked disk full",
+            "- Step 3 (blocked): blocked disk full",
+        ]
 
 
 class TestAcrossRuns:

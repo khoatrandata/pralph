@@ -454,8 +454,8 @@ class DbStateMixin:
                     impl_status, error, duration, cost_usd, story_id,
                     input_tokens, output_tokens, cache_read_input_tokens,
                     cache_creation_input_tokens, session_id,
-                    status, step, "commit", blocker)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    status, step, "commit", blocker, step_number)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     result.iteration,
@@ -477,6 +477,7 @@ class DbStateMixin:
                     result.step,
                     result.commit,
                     result.blocker,
+                    result.step_number,
                 ],
             )
 
@@ -490,7 +491,7 @@ class DbStateMixin:
                               impl_status, error, duration, cost_usd, story_id,
                               input_tokens, output_tokens, cache_read_input_tokens,
                               cache_creation_input_tokens, session_id,
-                              status, step, "commit", blocker, logged_at
+                              status, step, "commit", blocker, step_number, logged_at
                        FROM run_log WHERE project_id = ?
                        ORDER BY logged_at""",
                     [self.project_id],  # type: ignore[attr-defined]

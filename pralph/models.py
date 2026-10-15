@@ -88,6 +88,7 @@ class IterationResult:
     step: str = ""
     commit: str = ""
     blocker: str = ""
+    step_number: int = 0  # position in the plan file's checklist, 0 if unknown
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -109,7 +110,7 @@ class IterationResult:
             d["story_id"] = self.story_id
         if self.session_id:
             d["session_id"] = self.session_id
-        for key in ("status", "step", "commit", "blocker"):
+        for key in ("status", "step", "commit", "blocker", "step_number"):
             if getattr(self, key):
                 d[key] = getattr(self, key)
         return d

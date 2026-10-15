@@ -62,9 +62,19 @@ def next_step(content: str) -> PlanStep | None:
 
 
 def find_step(content: str, step: str) -> PlanStep | None:
-    """Find the top-level step matching a reported step line, checked or not."""
+    """Find the top-level step matching a reported step line.
+
+    Steps can share text, so the first unchecked match wins; a checked match
+    is returned only when no unchecked one exists.
+    """
     want = step_text(step)
-    return next((s for s in list_steps(content) if s.text == want), None)
+    matches = [s for s in list_steps(content) if s.text == want]
+    return next((s for s in matches if not s.checked), matches[0] if matches else None)
+
+
+def step_at_line(content: str, line_index: int) -> PlanStep | None:
+    """The top-level step on a 0-based line, or None (e.g. a sub-bullet)."""
+    return next((s for s in list_steps(content) if s.line_index == line_index), None)
 
 
 def tick_line(content: str, step: str) -> tuple[str, int]:

@@ -47,9 +47,17 @@ def blocker_signature(text: str) -> str:
     return " ".join(s.split())
 
 
-def step_key(step: str) -> str:
-    """Key for a step record: the step text without indent and checkbox."""
-    return planfile.step_text(step).strip()
+_NUMBERED_KEY_RE = re.compile(r"^#(\d+) (.*)$", re.DOTALL)
+
+
+def step_key(step: str, number: int = 0) -> str:
+    """Key for a step record: the step text without indent and checkbox.
+
+    Plan-file steps are keyed as ``#<number> <text>`` so steps that share
+    text keep separate records.
+    """
+    text = planfile.step_text(step).strip()
+    return f"#{number} {text}" if number and text else text
 
 
 def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: int) -> str:
@@ -57,7 +65,7 @@ def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: in
 
     Results without a typed status or without a step are not tracked.
     """
-    key = step_key(result.step)
+    key = step_key(result.step, result.step_number)
     if not result.status or not key:
         return ""
     rec = ps.steps.setdefault(key, StepRecord())
@@ -80,10 +88,10 @@ def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: in
     return ""
 
 
-def stop_message(ps: PhaseState, reason: str, plan_content: str | None = None) -> str:
+def stop_message(ps: PhaseState, reason: str) -> str:
     """Human-readable explanation of a step stop, naming the step and blocker."""
     rec = ps.steps.get(ps.last_step, StepRecord())
-    label = _short_step_label(ps.last_step, plan_content)
+    label = _short_step_label(ps.last_step)
     if reason == "repeated_blocker":
         return f"{label} hit the same blocker twice: {rec.last_blocker}"
     if reason == "step_attempts_exhausted":
@@ -111,21 +119,19 @@ def seed_carried_blocker(ps: PhaseState, step: str, blocker: str) -> None:
     rec.prior_signature = blocker_signature(blocker)
 
 
-def _short_step_label(key: str, plan_content: str | None) -> str:
-    """'step 3' when the plan file has the step, else the step text cut to 60 chars."""
-    if plan_content is not None:
-        found = planfile.find_step(plan_content, key)
-        if found:
-            return f"step {found.number}"
+def _short_step_label(key: str) -> str:
+    """'step 3' for a plan-file step, else the step text cut to 60 chars."""
+    m = _NUMBERED_KEY_RE.match(key)
+    if m:
+        return f"step {m.group(1)}"
     text = key if len(key) <= 60 else key[:57] + "..."
     return f"step '{text}'"
 
 
-def _step_label(key: str, plan_content: str | None) -> str:
-    if plan_content is not None:
-        found = planfile.find_step(plan_content, key)
-        if found:
-            return f"step {found.number} ({key})"
+def _step_label(key: str) -> str:
+    m = _NUMBERED_KEY_RE.match(key)
+    if m:
+        return f"step {m.group(1)} ({m.group(2)})"
     return f"step '{key}'"
 
 
@@ -150,7 +156,7 @@ def build_step_context(
         nxt = planfile.next_step(plan_content)
         if nxt is None:
             return "", ""
-        rec = ps.steps.get(step_key(nxt.line), StepRecord())
+        rec = ps.steps.get(step_key(nxt.line, nxt.number), StepRecord())
         attempt = rec.attempts + 1
         header = f"step {nxt.number}, attempt {attempt}/{max_attempts}"
         lines.append(f"Next step: step {nxt.number}, attempt {attempt} of {max_attempts}.")
@@ -166,9 +172,9 @@ def build_step_context(
     rec = ps.steps.get(ps.last_step) if ps.last_step else None
     if rec and rec.last_status in ("blocked", "in_progress"):
         header = f"{ps.last_step[:40]}, attempt {rec.attempts + 1}/{max_attempts}"
-        line = f"The last iteration worked on {_step_label(ps.last_step, None)} (attempt {rec.attempts}) and reported {rec.last_status}"
+        line = f"The last iteration worked on {_step_label(ps.last_step)} (attempt {rec.attempts}) and reported {rec.last_status}"
         lines.append(line + (f": {rec.last_blocker}" if rec.last_blocker else "."))
     for key, r in ps.steps.items():
         if r.prior_blocker and r.attempts == 0:
-            lines.append(_prior_line(_step_label(key, None), r))
+            lines.append(_prior_line(_step_label(key), r))
     return "\n".join(lines), header
