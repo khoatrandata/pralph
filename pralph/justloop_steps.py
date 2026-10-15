@@ -47,9 +47,6 @@ def blocker_signature(text: str) -> str:
     return " ".join(s.split())
 
 
-_NUMBERED_KEY_RE = re.compile(r"^#(\d+) (.*)$", re.DOTALL)
-
-
 def step_key(step: str, number: int = 0) -> str:
     """Key for a step record: the step text without indent and checkbox.
 
@@ -69,6 +66,8 @@ def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: in
     if not result.status or not key:
         return ""
     rec = ps.steps.setdefault(key, StepRecord())
+    rec.step_number = result.step_number
+    rec.text = step_key(result.step)
     ps.last_step = key
     rec.attempts += 1
     rec.last_status = result.status
@@ -91,7 +90,7 @@ def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: in
 def stop_message(ps: PhaseState, reason: str) -> str:
     """Human-readable explanation of a step stop, naming the step and blocker."""
     rec = ps.steps.get(ps.last_step, StepRecord())
-    label = _short_step_label(ps.last_step)
+    label = _short_step_label(ps.last_step, rec)
     if reason == "repeated_blocker":
         return f"{label} hit the same blocker twice: {rec.last_blocker}"
     if reason == "step_attempts_exhausted":
@@ -112,27 +111,29 @@ def carried_blocker(prev: PhaseState | None) -> tuple[str, str] | None:
     return prev.last_step, rec.last_blocker
 
 
-def seed_carried_blocker(ps: PhaseState, step: str, blocker: str) -> None:
+def seed_carried_blocker(ps: PhaseState, step: str, blocker: str,
+                         prev_record: StepRecord | None = None) -> None:
     """Give a fresh run's step record the previous run's blocker (one retry)."""
     rec = ps.steps.setdefault(step_key(step), StepRecord())
+    if prev_record is not None:
+        rec.step_number, rec.text = prev_record.step_number, prev_record.text
     rec.prior_blocker = blocker
     rec.prior_signature = blocker_signature(blocker)
 
 
-def _short_step_label(key: str) -> str:
+def _short_step_label(key: str, rec: StepRecord) -> str:
     """'step 3' for a plan-file step, else the step text cut to 60 chars."""
-    m = _NUMBERED_KEY_RE.match(key)
-    if m:
-        return f"step {m.group(1)}"
-    text = key if len(key) <= 60 else key[:57] + "..."
+    if rec.step_number:
+        return f"step {rec.step_number}"
+    text = rec.text or key
+    text = text if len(text) <= 60 else text[:57] + "..."
     return f"step '{text}'"
 
 
-def _step_label(key: str) -> str:
-    m = _NUMBERED_KEY_RE.match(key)
-    if m:
-        return f"step {m.group(1)} ({m.group(2)})"
-    return f"step '{key}'"
+def _step_label(key: str, rec: StepRecord) -> str:
+    if rec.step_number:
+        return f"step {rec.step_number} ({rec.text or key})"
+    return f"step '{rec.text or key}'"
 
 
 def _prior_line(label: str, rec: StepRecord) -> str:
@@ -172,9 +173,9 @@ def build_step_context(
     rec = ps.steps.get(ps.last_step) if ps.last_step else None
     if rec and rec.last_status in ("blocked", "in_progress"):
         header = f"{ps.last_step[:40]}, attempt {rec.attempts + 1}/{max_attempts}"
-        line = f"The last iteration worked on {_step_label(ps.last_step)} (attempt {rec.attempts}) and reported {rec.last_status}"
+        line = f"The last iteration worked on {_step_label(ps.last_step, rec)} (attempt {rec.attempts}) and reported {rec.last_status}"
         lines.append(line + (f": {rec.last_blocker}" if rec.last_blocker else "."))
     for key, r in ps.steps.items():
         if r.prior_blocker and r.attempts == 0:
-            lines.append(_prior_line(_step_label(key), r))
+            lines.append(_prior_line(_step_label(key, r), r))
     return "\n".join(lines), header

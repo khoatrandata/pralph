@@ -1675,7 +1675,7 @@ def run_justloop(
     if carried:
         step, blocker = carried
         ps0 = state.load_phase_state("justloop")
-        steps.seed_carried_blocker(ps0, step, blocker)
+        steps.seed_carried_blocker(ps0, step, blocker, previous_state.steps.get(step))
         state.save_phase_state(ps0)
         click.echo(click.style(f"  previous run stopped on {step!r} with: {blocker[:200]}", fg="yellow"))
         click.echo(click.style("  retrying it once", fg="yellow"))

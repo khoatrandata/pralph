@@ -120,6 +120,17 @@ def test_numbered_steps_with_same_text_keep_separate_records():
     assert js.stop_message(ps, "repeated_blocker") == "step 4 hit the same blocker twice: b"
 
 
+def test_unnumbered_step_text_that_looks_numbered_is_quoted():
+    ps = PhaseState(phase="justloop")
+    js.record_step_result(ps, _ir("blocked", step="#12 Add retry to fetcher", blocker="b"), 5)
+    js.record_step_result(ps, _ir("blocked", step="#12 Add retry to fetcher", blocker="b"), 5)
+    assert js.stop_message(ps, "repeated_blocker") == "step '#12 Add retry to fetcher' hit the same blocker twice: b"
+    text, _ = js.build_step_context(PhaseState(phase="justloop", last_step=ps.last_step,
+                                               steps={ps.last_step: StepRecord(attempts=1, last_status="blocked",
+                                                                               last_blocker="b")}), 3)
+    assert "step '#12 Add retry to fetcher'" in text
+
+
 class TestStepContext:
     PLAN = "## Steps\n\n- [x] one\n- [ ] two\n  - [ ] sub\n- [ ] three\n"
 

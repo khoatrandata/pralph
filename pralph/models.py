@@ -132,7 +132,11 @@ class LoopResult:
 
 @dataclass
 class StepRecord:
-    """Per-run history of one justloop step, keyed by its step text."""
+    """Per-run history of one justloop step.
+
+    Keyed by step text, or by ``#<number> <text>`` for plan-file steps so
+    steps that share text stay separate.
+    """
     attempts: int = 0
     last_status: str = ""
     last_blocker: str = ""
@@ -141,6 +145,8 @@ class StepRecord:
     # Blocker the previous run stopped on, carried over for one retry
     prior_blocker: str = ""
     prior_signature: str = ""
+    step_number: int = 0  # plan-file position; 0 without a plan file
+    text: str = ""        # step text, for labels
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if v not in ("", 0, [])}
@@ -154,6 +160,8 @@ class StepRecord:
             signatures=list(d.get("signatures", [])),
             prior_blocker=d.get("prior_blocker", ""),
             prior_signature=d.get("prior_signature", ""),
+            step_number=d.get("step_number", 0),
+            text=d.get("text", ""),
         )
 
 
