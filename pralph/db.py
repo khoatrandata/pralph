@@ -92,15 +92,20 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             cache_read_input_tokens INTEGER DEFAULT 0,
             cache_creation_input_tokens INTEGER DEFAULT 0,
             session_id TEXT DEFAULT '',
+            status TEXT DEFAULT '',
+            step TEXT DEFAULT '',
+            "commit" TEXT DEFAULT '',
+            blocker TEXT DEFAULT '',
             logged_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
 
-    # Migration: add session_id column if missing (existing DBs)
-    try:
-        conn.execute("SELECT session_id FROM run_log LIMIT 0")
-    except Exception:
-        conn.execute("ALTER TABLE run_log ADD COLUMN session_id TEXT DEFAULT ''")
+    # Migration: add columns missing from existing DBs
+    for col in ("session_id", "status", "step", "commit", "blocker"):
+        try:
+            conn.execute(f'SELECT "{col}" FROM run_log LIMIT 0')
+        except Exception:
+            conn.execute(f'ALTER TABLE run_log ADD COLUMN "{col}" TEXT DEFAULT \'\'')
 
 
     conn.execute("""

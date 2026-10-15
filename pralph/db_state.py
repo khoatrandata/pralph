@@ -449,8 +449,9 @@ class DbStateMixin:
                    (project_id, iteration, phase, mode, success, stories_generated,
                     impl_status, error, duration, cost_usd, story_id,
                     input_tokens, output_tokens, cache_read_input_tokens,
-                    cache_creation_input_tokens, session_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    cache_creation_input_tokens, session_id,
+                    status, step, "commit", blocker)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     result.iteration,
@@ -468,6 +469,10 @@ class DbStateMixin:
                     result.cache_read_input_tokens,
                     result.cache_creation_input_tokens,
                     result.session_id,
+                    result.status,
+                    result.step,
+                    result.commit,
+                    result.blocker,
                 ],
             )
 
@@ -480,7 +485,8 @@ class DbStateMixin:
                     """SELECT iteration, phase, mode, success, stories_generated,
                               impl_status, error, duration, cost_usd, story_id,
                               input_tokens, output_tokens, cache_read_input_tokens,
-                              cache_creation_input_tokens, session_id, logged_at
+                              cache_creation_input_tokens, session_id,
+                              status, step, "commit", blocker, logged_at
                        FROM run_log WHERE project_id = ?
                        ORDER BY logged_at""",
                     [self.project_id],  # type: ignore[attr-defined]

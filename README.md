@@ -217,7 +217,13 @@ gh issue view 42 --json body -q .body | pralph justloop
 pralph justloop --reset "migrate database schema to v2"
 ```
 
-Each iteration has full tool access (Read, Write, Edit, Bash, Glob, Grep) and resume context from prior iterations. The loop terminates when Claude determines the task is fully complete, after 5 consecutive errors, or when max iterations is reached.
+Each iteration has full tool access (Read, Write, Edit, Bash, Glob, Grep) and resume context from prior iterations. Every iteration ends with a typed result (via `claude -p --json-schema`): the step worked on, a status (`done`, `in_progress`, `blocked` or `nothing_left`), the commit, a one-line note, the blocker text and any actions that need a person. The status, step, commit and blocker are saved in the run log. The loop terminates when an iteration reports `nothing_left`, after 5 consecutive errors, or when max iterations is reached. If an iteration returns no typed result, the old `[LOOP_COMPLETE]` marker still ends the loop.
+
+**Plan files** — With `--plan-file PATH`, pralph manages a checklist plan (rules, `- [ ]` steps, and a "Progress notes" section). The model works on the next unchecked step and reports it; pralph ticks that exact line when the step is `done`, appends the model's note under "Progress notes", and stops once every top-level step is ticked. A reported step that isn't in the file is recorded as an error in the run log. Without a prompt, the task defaults to "Read PATH and do the next unchecked step."
+
+```bash
+pralph justloop --plan-file .pralph/loop-plan.md
+```
 
 **Tip: review-driven fix loop** — A powerful pattern is to first run Claude Code's `/review` command on your codebase and have it write the issues to a file, then let justloop work through them one by one:
 
@@ -395,6 +401,7 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 | Option | Default | Description |
 |---|---|---|
 | `--prompt` | — | Task prompt (alternative to positional args) |
+| `--plan-file` | — | Checklist plan file that pralph ticks and writes progress notes to |
 | `--reset` | off | Reset phase state and start fresh |
 
 #### `compound`
@@ -576,7 +583,7 @@ Available templates:
 - `implement-phase1-analyze.md` — Architecture-first grouping analysis
 - `implement-phase1.md` — Phase 1 batch implementation
 - `review.md` — Code review after implementation
-- `justloop.md` — Task execution prompt with completion signal
+- `justloop.md` — Task execution prompt. Placeholders: `{{user_prompt}}`, `{{plan_file}}` and `{{completion_section}}` (the structured-result instructions; appended automatically when a custom template leaves it out)
 - `compound.md` — Solution capture after implementation
 - `compact.md` — Semantic merging of duplicate solutions
 

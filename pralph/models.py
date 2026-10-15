@@ -83,6 +83,11 @@ class IterationResult:
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     session_id: str = ""
+    # Typed justloop result (empty for other phases)
+    status: str = ""
+    step: str = ""
+    commit: str = ""
+    blocker: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -104,7 +109,24 @@ class IterationResult:
             d["story_id"] = self.story_id
         if self.session_id:
             d["session_id"] = self.session_id
+        for key in ("status", "step", "commit", "blocker"):
+            if getattr(self, key):
+                d[key] = getattr(self, key)
         return d
+
+
+LOOP_STATUSES = ("done", "in_progress", "blocked", "nothing_left")
+
+
+@dataclass
+class LoopResult:
+    """The structured object a justloop iteration ends with."""
+    status: str
+    step: str = ""
+    commit: str = ""
+    note: str = ""
+    blocker: str = ""
+    needs_human: list[str] = field(default_factory=list)
 
 
 @dataclass
