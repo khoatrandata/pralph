@@ -130,6 +130,37 @@ class LoopResult:
 
 
 @dataclass
+class StepRecord:
+    """Per-run history of one justloop step, keyed by its step text."""
+    attempts: int = 0
+    last_status: str = ""
+    last_blocker: str = ""
+    # Normalised blocker signatures seen on this step in this run
+    signatures: list[str] = field(default_factory=list)
+    # Blocker the previous run stopped on, carried over for one retry
+    prior_blocker: str = ""
+    prior_signature: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items() if v not in ("", 0, [])}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> StepRecord:
+        return cls(
+            attempts=d.get("attempts", 0),
+            last_status=d.get("last_status", ""),
+            last_blocker=d.get("last_blocker", ""),
+            signatures=list(d.get("signatures", [])),
+            prior_blocker=d.get("prior_blocker", ""),
+            prior_signature=d.get("prior_signature", ""),
+        )
+
+
+def steps_from_dict(d: dict[str, Any] | None) -> dict[str, StepRecord]:
+    return {k: StepRecord.from_dict(v) for k, v in (d or {}).items()}
+
+
+@dataclass
 class PhaseState:
     phase: str
     current_iteration: int = 0
@@ -143,6 +174,9 @@ class PhaseState:
     active_session_id: str = ""
     active_story_id: str = ""
     active_session_started: str = ""
+    # justloop: per-step records for this run, and the step of the last typed result
+    steps: dict[str, StepRecord] = field(default_factory=dict)
+    last_step: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -162,6 +196,10 @@ class PhaseState:
             d["active_story_id"] = self.active_story_id
         if self.active_session_started:
             d["active_session_started"] = self.active_session_started
+        if self.steps:
+            d["steps"] = {k: v.to_dict() for k, v in self.steps.items()}
+        if self.last_step:
+            d["last_step"] = self.last_step
         return d
 
     @classmethod
@@ -179,4 +217,6 @@ class PhaseState:
             active_session_id=d.get("active_session_id", ""),
             active_story_id=d.get("active_story_id", ""),
             active_session_started=d.get("active_session_started", ""),
+            steps=steps_from_dict(d.get("steps")),
+            last_step=d.get("last_step", ""),
         )

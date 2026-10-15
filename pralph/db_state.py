@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from pralph.models import IterationResult, PhaseState, Story, StoryStatus
+from pralph.models import IterationResult, PhaseState, Story, StoryStatus, steps_from_dict
 
 
 def _row_to_story(row: tuple, columns: list[str]) -> Story:
@@ -402,6 +402,8 @@ class DbStateMixin:
             active_session_id=d.get("active_session_id", ""),
             active_story_id=d.get("active_story_id", ""),
             active_session_started=d.get("active_session_started", ""),
+            steps=steps_from_dict(json.loads(d.get("steps") or "{}")),
+            last_step=d.get("last_step") or "",
         )
 
     def save_phase_state(self, state: PhaseState) -> None:
@@ -411,8 +413,8 @@ class DbStateMixin:
                    (project_id, phase, current_iteration, consecutive_empty,
                     consecutive_errors, completed, completion_reason, total_cost_usd,
                     last_error, last_summary, active_session_id, active_story_id,
-                    active_session_started)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    active_session_started, steps, last_step)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     state.phase,
@@ -427,6 +429,8 @@ class DbStateMixin:
                     state.active_session_id,
                     state.active_story_id,
                     state.active_session_started,
+                    json.dumps({k: v.to_dict() for k, v in state.steps.items()}),
+                    state.last_step,
                 ],
             )
 

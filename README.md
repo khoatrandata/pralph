@@ -225,6 +225,8 @@ Each iteration has full tool access (Read, Write, Edit, Bash, Glob, Grep) and re
 pralph justloop --plan-file .pralph/loop-plan.md
 ```
 
+**Stop rules** — pralph tracks attempts per step within a run and tells each iteration which step is next, its attempt number and how the last attempt ended. It stops the run when the same blocker comes back on a step (`repeated_blocker`; blockers are compared after normalising case, numbers, hashes and paths) or when a step is still unfinished after `--max-step-attempts` tries (`step_attempts_exhausted`, default 3). If the previous run ended blocked on a step, the next run retries that step once and stops if it fails the same way.
+
 **Tip: review-driven fix loop** — A powerful pattern is to first run Claude Code's `/review` command on your codebase and have it write the issues to a file, then let justloop work through them one by one:
 
 ```bash
@@ -402,6 +404,7 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 |---|---|---|
 | `--prompt` | — | Task prompt (alternative to positional args) |
 | `--plan-file` | — | Checklist plan file that pralph ticks and writes progress notes to |
+| `--max-step-attempts` | 3 | Stop when one step is still unfinished after this many attempts |
 | `--reset` | off | Reset phase state and start fresh |
 
 #### `compound`

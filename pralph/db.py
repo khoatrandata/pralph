@@ -123,9 +123,18 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             active_session_id TEXT DEFAULT '',
             active_story_id TEXT DEFAULT '',
             active_session_started TEXT DEFAULT '',
+            steps TEXT DEFAULT '{}',
+            last_step TEXT DEFAULT '',
             PRIMARY KEY (project_id, phase)
         )
     """)
+
+    # Migration: justloop step records (existing DBs)
+    for col, default in (("steps", "'{}'"), ("last_step", "''")):
+        try:
+            conn.execute(f"SELECT {col} FROM phase_state LIMIT 0")
+        except Exception:
+            conn.execute(f"ALTER TABLE phase_state ADD COLUMN {col} TEXT DEFAULT {default}")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS phase1_analysis (

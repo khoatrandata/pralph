@@ -22,6 +22,7 @@ from pralph.assembler import (
 from pralph.compound import run_compound_capture
 from pralph.models import IterationResult, PhaseState, Story, StoryStatus
 from pralph.parallel import FOUNDATION_CATEGORIES, sort_stories, run_parallel_implement
+from pralph import justloop_steps as steps
 from pralph import plan_file as planfile
 from pralph.parser import (
     JUSTLOOP_RESULT_SCHEMA,
@@ -1616,11 +1617,16 @@ def run_justloop(
     dangerously_skip_permissions: bool = False,
     max_budget_usd: float | None = None,
     plan_file: str = "",
+    max_step_attempts: int = steps.DEFAULT_MAX_STEP_ATTEMPTS,
+    previous_state: PhaseState | None = None,
 ) -> PhaseState:
     """Run a simple prompt loop until completion.
 
     Each iteration ends with a typed result (``--json-schema``). With
     ``plan_file``, pralph ticks steps and writes progress notes itself.
+    Step attempts and blockers are tracked per run and stop the loop on a
+    repeated blocker or after ``max_step_attempts``. ``previous_state`` is the
+    last run's phase state; a step it ended blocked on gets one retry.
     """
     import uuid
     from pathlib import Path
@@ -1638,9 +1644,30 @@ def run_justloop(
         plan_path = str(p if p.is_absolute() else Path(state.project_dir) / p)
     plan_display = plan_file
 
+    def _plan_content() -> str | None:
+        if not plan_path:
+            return None
+        try:
+            return planfile.read_plan(plan_path)
+        except OSError:
+            return None
+
+    carried = steps.carried_blocker(previous_state)
+    if carried:
+        step, blocker = carried
+        ps0 = state.load_phase_state("justloop")
+        steps.seed_carried_blocker(ps0, step, blocker)
+        state.save_phase_state(ps0)
+        click.echo(click.style(f"  previous run stopped on {step!r} with: {blocker[:200]}", fg="yellow"))
+        click.echo(click.style("  retrying it once", fg="yellow"))
+
     def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
+        step_context, header = steps.build_step_context(ps, max_step_attempts, _plan_content())
+        if header:
+            click.echo(click.style(f"  {header}", fg="cyan"))
         prompt = assemble_justloop_prompt(
             state, user_prompt=user_prompt, phase_state=ps, plan_file=plan_display,
+            step_context=step_context,
         )
 
         sid = str(uuid.uuid4())
@@ -1680,6 +1707,12 @@ def run_justloop(
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
         if result.status == "nothing_left":
             ps.completion_reason = "loop_complete"
+            return True
+        stop = steps.record_step_result(ps, result, max_step_attempts)
+        if stop:
+            ps.completion_reason = stop
+            ps.last_error = steps.stop_message(ps, stop)[:500]
+            click.echo(click.style(f"  ✗ stopping: {ps.last_error}", fg="red", bold=True))
             return True
         if not result.status and result.raw_output and detect_loop_complete(result.raw_output):
             ps.completion_reason = "loop_complete"

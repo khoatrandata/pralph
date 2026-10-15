@@ -624,8 +624,10 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
 @click.option("--prompt", default=None, help="Task prompt (prompted if omitted)")
 @click.option("--plan-file", default=None, type=click.Path(),
               help="Checklist plan file pralph manages: ticks steps and writes progress notes")
+@click.option("--max-step-attempts", default=3, show_default=True, type=click.IntRange(min=1),
+              help="Stop when one step is still unfinished after this many attempts")
 @click.pass_context
-def justloop(ctx, prompt_args, prompt, plan_file):
+def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts):
     """Run a prompt in a loop until complete."""
     project_dir = ctx.obj["project_dir"]
     config_path = os.path.join(project_dir, ".pralph", "project.json")
@@ -650,7 +652,9 @@ def justloop(ctx, prompt_args, prompt, plan_file):
     else:
         user_prompt = _resolve_prompt(None, "Task prompt")
 
-    # Always start fresh — justloop is a standalone tool, not a resumable phase
+    # Always start fresh — justloop is a standalone tool, not a resumable phase.
+    # Keep the previous state so a step it ended blocked on gets one retry.
+    previous_state = state.load_phase_state("justloop")
     _reset_phase(state, "justloop")
 
     click.echo(f"pralph justloop — max {ctx.obj['max_iterations']} iterations")
@@ -671,6 +675,8 @@ def justloop(ctx, prompt_args, prompt, plan_file):
         dangerously_skip_permissions=ctx.obj["dangerously_skip_permissions"],
         max_budget_usd=ctx.obj["max_budget_usd"],
         plan_file=plan_file or "",
+        max_step_attempts=max_step_attempts,
+        previous_state=previous_state,
     )
 
 
