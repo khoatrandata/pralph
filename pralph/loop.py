@@ -1583,20 +1583,25 @@ def _justloop_iteration_result(
 
     if plan_path:
         errors = []
-        # Number the note by step so later iterations can match notes to steps
-        found = None
         try:
-            found = planfile.find_step(planfile.read_plan(plan_path), typed.step) if typed.step else None
+            content = planfile.read_plan(plan_path)
         except OSError:
-            pass
+            content = None
+        # Number the note by step so later iterations can match notes to steps
+        found = planfile.find_step(content, typed.step) if content is not None and typed.step else None
         if typed.status == "done":
             try:
                 planfile.tick_step(plan_path, typed.step)
             except (planfile.PlanFileError, OSError) as e:
                 errors.append(f"plan_file: {e}")
+                # Nothing was ticked: count this as an unfinished attempt on the
+                # plan's next step, so --max-step-attempts still applies.
+                nxt = planfile.next_step(content) if content is not None else None
+                if nxt is not None:
+                    ir.status, ir.step, found = "in_progress", nxt.line, nxt
         try:
             if found and typed.note:
-                suffix = "" if typed.status == "done" else f" ({typed.status})"
+                suffix = "" if ir.status == "done" else f" ({ir.status})"
                 planfile.append_note(plan_path, f"Step {found.number}{suffix}: {typed.note}")
             else:
                 planfile.append_note(plan_path, typed.note)

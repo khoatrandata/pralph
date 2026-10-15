@@ -1,6 +1,6 @@
 # Plan: justloop with typed state, a fresh reviewer and focused context
 
-Status: ready to implement. Written 2026-10-15 for hand-over to another session.
+Status: changes 1 and 2 implemented on branch `feat/justloop-typed-result` (PR #1, 2026-10-15); changes 3–6 not started. Written 2026-10-15 for hand-over to another session. The design sections for changes 1 and 2 describe the plan as written; where the implementation differs, the change notes under each heading say how.
 
 ## Why
 
@@ -14,8 +14,8 @@ The design idea behind all six changes: keep the state the loop depends on in pr
 
 ## The six changes, in build order
 
-1. Typed iteration result (structured output), the foundation.
-2. Step attempts and a stop rule enforced in code.
+1. Typed iteration result (structured output), the foundation. **Done.**
+2. Step attempts and a stop rule enforced in code. **Done.**
 3. A fresh-process reviewer after each step.
 4. Permission denials recorded as typed hand-off items.
 5. Focused context: send the current step, not the whole plan.
@@ -34,6 +34,13 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 - Tests are pytest under `tests/`. Release goes through CodeArtifact (platform-data-lake's `/publish` skill). Never hand-bump the version.
 
 ## Change 1 — Typed iteration result
+
+**Implemented** in `db9cb4f`, with follow-ups in `7f9e199` and the review-fix commit on the same branch. Differences from the design below:
+- The prompt drops the `[LOOP_COMPLETE]` section in both modes, not only with `--plan-file`, because the structured object replaces the final text.
+- Progress notes are prefixed with the step number and, when not done, the status ("Step 3 (blocked): ...").
+- A `done` result whose step cannot be ticked is logged as an error and counted as an `in_progress` attempt on the plan's next step.
+- With `--plan-file`, the loop also stops once every top-level step is ticked, and the prompt defaults to "Read PATH and do the next unchecked step."
+- pralph does not commit its plan-file edits.
 
 **Problem.** The loop's outcome is prose. pralph cannot tell done from blocked from half-done, and cannot read the commit, the note or the blocker without parsing text.
 
@@ -62,6 +69,8 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 **Open question.** If the model ends in `in_progress` repeatedly on the same step, is that progress or a stall? Change 2 answers that with an attempt cap.
 
 ## Change 2 — Step attempts and a stop rule in code
+
+**Implemented** in `0dcac36`. Difference from the design below: the "last two path components" rule alone would not make the example blockers match, so paths under temp directories are reduced to their last component.
 
 **Problem.** The stop rule ("stop if the same error appears twice") is prompt text, and the agent applies it by reading its own notes, which can be stale.
 

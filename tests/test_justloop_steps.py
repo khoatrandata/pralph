@@ -229,6 +229,13 @@ class TestSimulatedLoop:
         assert "step 3, attempt 1 of 3" in calls[2]
         assert "step 3, attempt 2 of 3" in calls[3]
 
+    def test_done_on_unknown_step_hits_cap(self, jsonl_state, plan, monkeypatch):
+        ps, calls = _run(jsonl_state, monkeypatch, [_cr("done", step="- [ ] wrong")] * 3,
+                         plan_file="loop-plan.md", max_step_attempts=3)
+        assert len(calls) == 3
+        assert ps.completion_reason == "step_attempts_exhausted"
+        assert "step 2, attempt 3 of 3" in calls[2]
+
     def test_consecutive_invocation_errors(self, jsonl_state, monkeypatch):
         ps, calls = _run(jsonl_state, monkeypatch, [_cr("", success=False)] * 5)
         assert len(calls) == 5

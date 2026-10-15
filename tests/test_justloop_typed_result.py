@@ -229,6 +229,9 @@ class TestIterationResult:
         assert ir.success
         assert "step not found" in ir.error
         assert plan.read_text().count("[x]") == 1
+        # Counted as an unfinished attempt on the plan's real next step
+        assert (ir.status, ir.step) == ("in_progress", "- [ ] Add tests")
+        assert "- Step 2 (in_progress): Parser added" in plan.read_text()
 
     def test_no_structured_output_leaves_status_empty(self):
         ir = loop._justloop_iteration_result(1, "execute", _cr(None, result="[LOOP_COMPLETE]"))
