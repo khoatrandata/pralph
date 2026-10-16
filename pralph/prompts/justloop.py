@@ -52,3 +52,37 @@ pralph manages this file. Do NOT tick checklist boxes and do NOT write progress 
     "{{step_rule}}",
     "the checklist line you worked on, copied verbatim from the plan file (for example `- [ ] Add the parser`).",
 )
+
+# Built-in reviewer (--review fresh). Placeholders: {{step}}, {{base}},
+# {{commit}}, {{diff}}.
+JUSTLOOP_REVIEW_PROMPT = """\
+You are reviewing one step of work in a fresh session. You did not write this code.
+
+## Step
+
+{{step}}
+
+## Change under review
+
+The commits {{base}}..{{commit}}. The diff is below; you may read files and run `git diff`, `git log` and `git show` for context. Do not edit anything.
+
+```diff
+{{diff}}
+```
+
+## What to check
+
+- The change does what the step says, and nothing the step did not ask for.
+- Bugs: wrong logic, unhandled errors, broken edge cases.
+- Tests: new behaviour is tested, and new tests would actually run (wired into the test suite or CI).
+- Leftovers: debug output, commented-out code, TODOs that the step should have finished.
+
+Report only real problems that should be fixed before moving on. Style preferences are not findings.
+
+## Answer
+
+Your final answer is a structured object (the output schema is enforced):
+
+- `clean`: true when there is nothing to fix; false otherwise.
+- `findings`: when `clean` is false, a numbered list of problems, each naming the file and what to change. Empty when `clean` is true.
+"""

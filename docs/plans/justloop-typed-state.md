@@ -1,6 +1,6 @@
 # Plan: justloop with typed state, a fresh reviewer and focused context
 
-Status: changes 1 and 2 implemented on branch `feat/justloop-typed-result` (PR #1, 2026-10-15); changes 3–6 not started. Written 2026-10-15 for hand-over to another session. The design sections for changes 1 and 2 describe the plan as written; where the implementation differs, the change notes under each heading say how.
+Status: changes 1 and 2 merged (PR #1, 2026-10-16); changes 3 and 4 implemented on branch `feat/justloop-review-denials` (2026-10-16); changes 5 and 6 not started. Written 2026-10-15 for hand-over to another session. The design sections describe the plan as written; where the implementation differs, the change notes under each heading say how.
 
 ## Why
 
@@ -16,8 +16,8 @@ The design idea behind all six changes: keep the state the loop depends on in pr
 
 1. Typed iteration result (structured output), the foundation. **Done.**
 2. Step attempts and a stop rule enforced in code. **Done.**
-3. A fresh-process reviewer after each step.
-4. Permission denials recorded as typed hand-off items.
+3. A fresh-process reviewer after each step. **Done.**
+4. Permission denials recorded as typed hand-off items. **Done.**
 5. Focused context: send the current step, not the whole plan.
 6. Model chosen per step.
 
@@ -92,6 +92,15 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 
 ## Change 3 — A fresh-process reviewer after each step
 
+**Implemented** on `feat/justloop-review-denials`. Differences from the design below:
+- The review base is the last cleanly reviewed commit, so a re-review after findings covers the step and its fixes together. The base starts at HEAD when the run starts.
+- A done step with no new commit since the base is not reviewed and is ticked.
+- Only exit 1 means findings. Any other non-zero exit, a signal, or a timeout (30 minutes, which kills the command's process group) is `review_error`, and the error is added to the "Needs a person" list. This matches platform-data-lake's `scripts/headless_review.py`: 0 is a 10/10, 1 is below 10, 2 is a review that did not complete and 3 is a limit that needs a person.
+- The findings lead the iteration's "Step Context" section, which comes after the task, rather than the very top of the prompt.
+- Without a plan file, findings are tracked under the step name "the last unit of work".
+- `--review-every N` always reviews the plan's last step.
+- The command also gets `PRALPH_STEP_NUMBER`.
+
 **Problem.** Self-review in the same session rated 10/10 work that two independent reviews marked down to 8 and 5.5. A model rarely finds fault with the context it just produced.
 
 **Design.**
@@ -100,7 +109,8 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 - On findings, pralph does not tick the step. It marks the step `in_progress`, saves the findings in the step record, and the next iteration's prompt opens with "Fix these review findings for step N, then commit: <findings>". The attempt cap from change 2 applies, so a review that never passes ends the run as `review_not_passing`. It does not loop forever.
 - If the review command itself crashes (not found, timeout), record `review_error` and stop. Never auto-approve on a review error; that is a deliberate difference from `implement`.
 - Add a built-in option `--review fresh`, for users without a review script. It runs `claude -p` with a reviewer prompt in a new session, on that step's diff only, with read-only tools. The reviewer returns a typed verdict (`--json-schema`: `clean` true or false, plus `findings`). Reuse `assemble_review_prompt` ideas, but scope it to `git diff PRALPH_BASE..PRALPH_COMMIT`, not a story.
-- For platform-data-lake, the intended value is `--review-cmd "python3 scripts/headless_review.py"`. That script reviews the branch in a fresh read-only session, records a stamp, and has spend caps. Confirm how it sets its exit code before relying on it; its output prints a 0–10 rating and exits 1 below 10.
+- For platform-data-lake, the intended value is `--review-cmd 'python3 scripts/headless_review.py --step --base "$PRALPH_BASE"'` (the `--step` mode was added for this loop: limits per step, spend capped per run, no push stamp). The original note follows.
+- Earlier intended value: `--review-cmd "python3 scripts/headless_review.py"`. That script reviews the branch in a fresh read-only session, records a stamp, and has spend caps. Confirm how it sets its exit code before relying on it; its output prints a 0–10 rating and exits 1 below 10.
 - Cost note: one review per step roughly doubles cost on review-heavy runs. Make `--review-every N` available for long, low-risk runs.
 
 **Acceptance.**
@@ -110,6 +120,8 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 **Tests.** A fake review command (a small script that exits 1 with findings the first time and 0 the second) driving a simulated loop. A crashing review command.
 
 ## Change 4 — Permission denials as typed hand-off items
+
+**Implemented** on `feat/justloop-review-denials`. A recorded run (2026-10-16) confirmed the field: the result event's `permission_denials` lists `tool_name`, `tool_use_id` and `tool_input`. The refused tool result reads "Claude requested permissions to write to PATH, but you haven't granted it yet." with `is_error` set. Both sources are matched by `tool_use_id`, and the refusal text becomes the reason, with project paths made relative. Items are kept on the run's phase state and in the run log; `--stop-on-denial` stops with `permission_denied`. Model-reported items are deduplicated by their text.
 
 **Problem.** When Claude Code refuses a tool call in an unattended run, the agent improvises a workaround or a sentence in the notes. The person running the loop learns about it only by reading everything.
 

@@ -89,6 +89,11 @@ class IterationResult:
     commit: str = ""
     blocker: str = ""
     step_number: int = 0  # position in the plan file's checklist, 0 if unknown
+    # justloop review of a done step: "clean", "findings" or "error"
+    review: str = ""
+    review_findings: str = ""
+    # justloop hand-off items from this iteration (see pralph.denials)
+    needs_human: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -110,7 +115,8 @@ class IterationResult:
             d["story_id"] = self.story_id
         if self.session_id:
             d["session_id"] = self.session_id
-        for key in ("status", "step", "commit", "blocker", "step_number"):
+        for key in ("status", "step", "commit", "blocker", "step_number",
+                    "review", "review_findings", "needs_human"):
             if getattr(self, key):
                 d[key] = getattr(self, key)
         return d
@@ -147,6 +153,7 @@ class StepRecord:
     prior_signature: str = ""
     step_number: int = 0  # plan-file position; 0 without a plan file
     text: str = ""        # step text, for labels
+    review_findings: str = ""  # open findings from the last review of this step
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if v not in ("", 0, [])}
@@ -162,6 +169,7 @@ class StepRecord:
             prior_signature=d.get("prior_signature", ""),
             step_number=d.get("step_number", 0),
             text=d.get("text", ""),
+            review_findings=d.get("review_findings", ""),
         )
 
 
@@ -186,6 +194,8 @@ class PhaseState:
     # justloop: per-step records for this run, and the step of the last typed result
     steps: dict[str, StepRecord] = field(default_factory=dict)
     last_step: str = ""
+    # justloop: hand-off items for a person, collected over the run
+    needs_human: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -209,6 +219,8 @@ class PhaseState:
             d["steps"] = {k: v.to_dict() for k, v in self.steps.items()}
         if self.last_step:
             d["last_step"] = self.last_step
+        if self.needs_human:
+            d["needs_human"] = self.needs_human
         return d
 
     @classmethod
@@ -228,4 +240,5 @@ class PhaseState:
             active_session_started=d.get("active_session_started", ""),
             steps=steps_from_dict(d.get("steps")),
             last_step=d.get("last_step", ""),
+            needs_human=list(d.get("needs_human") or []),
         )
