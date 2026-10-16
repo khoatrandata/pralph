@@ -626,9 +626,21 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
               help="Checklist plan file pralph manages: ticks steps and writes progress notes")
 @click.option("--max-step-attempts", default=3, show_default=True, type=click.IntRange(min=1),
               help="Stop when one step is still unfinished after this many attempts")
+@click.option("--review-cmd", default=None,
+              help="Command that reviews each done step before it is ticked (exit 0 = clean; "
+                   "stdout = findings). Gets PRALPH_STEP, PRALPH_COMMIT and PRALPH_BASE")
+@click.option("--review", "review_mode", default=None, type=click.Choice(["fresh"]),
+              help="Built-in review of each done step in a fresh read-only claude session")
+@click.option("--review-every", default=1, show_default=True, type=click.IntRange(min=1),
+              help="Review every Nth done step (the plan's last step is always reviewed)")
+@click.option("--stop-on-denial", is_flag=True, default=False,
+              help="Stop at the first refused tool call instead of letting the loop work around it")
 @click.pass_context
-def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts):
+def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
+             review_cmd, review_mode, review_every, stop_on_denial):
     """Run a prompt in a loop until complete."""
+    if review_cmd and review_mode:
+        raise click.UsageError("use --review-cmd or --review, not both")
     project_dir = ctx.obj["project_dir"]
     config_path = os.path.join(project_dir, ".pralph", "project.json")
     if not os.path.exists(config_path):
@@ -663,6 +675,9 @@ def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts):
     click.echo(f"  prompt: {user_prompt}")
     if plan_file:
         click.echo(f"  plan file: {plan_file}")
+    if review_cmd or review_mode:
+        every = f", every {review_every} steps" if review_every > 1 else ""
+        click.echo(f"  review: {review_cmd or review_mode}{every}")
 
     run_justloop(
         state,
@@ -677,6 +692,10 @@ def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts):
         plan_file=plan_file or "",
         max_step_attempts=max_step_attempts,
         previous_state=previous_state,
+        review_cmd=review_cmd or "",
+        review=review_mode or "",
+        review_every=review_every,
+        stop_on_denial=stop_on_denial,
     )
 
 

@@ -22,8 +22,10 @@ from pralph.assembler import (
 from pralph.compound import run_compound_capture
 from pralph.models import IterationResult, PhaseState, Story, StoryStatus
 from pralph.parallel import FOUNDATION_CATEGORIES, sort_stories, run_parallel_implement
+from pralph import denials
 from pralph import justloop_steps as steps
 from pralph import plan_file as planfile
+from pralph.justloop_review import StepReviewer
 from pralph.parser import (
     JUSTLOOP_RESULT_SCHEMA,
     detect_completion_signal,
@@ -1545,20 +1547,27 @@ def _implement_single(
 
 def _justloop_iteration_result(
     i: int, mode: str, cr: ClaudeResult, plan_path: str = "",
+    reviewer: StepReviewer | None = None, project_dir: str = "",
 ) -> IterationResult:
     """Build a justloop IterationResult from a ClaudeResult.
 
-    Reads the typed result from structured output. With a plan file, pralph
-    ticks the reported step on ``done`` and appends the note. A step that
-    cannot be ticked is recorded in ``error`` (the iteration still counts as
-    a success, since the model's work happened).
+    Reads the typed result from structured output. A ``done`` step is
+    reviewed first when a reviewer is set; findings or a review error keep
+    it open (``in_progress``). With a plan file, pralph then ticks the step
+    on ``done`` and appends the note. A step that cannot be ticked is
+    recorded in ``error`` (the iteration still counts as a success, since the
+    model's work happened). Permission denials and the model's
+    ``needs_human`` become hand-off items.
     """
     if not cr.success:
-        return IterationResult(
+        ir = IterationResult(
             iteration=i, phase="justloop", mode=mode,
             success=False, error=cr.error, cost_usd=cr.cost_usd,
             **_token_kwargs(cr),
         )
+        ir.needs_human = denials.denial_items(cr.permission_denials, "", 0, project_dir)
+        _echo_needs_human(ir.needs_human)
+        return ir
 
     ir = IterationResult(
         iteration=i, phase="justloop", mode=mode,
@@ -1569,6 +1578,8 @@ def _justloop_iteration_result(
     typed = parse_loop_result(cr.structured_output)
     if typed is None:
         click.echo(click.style("  ⚠ no structured result — falling back to [LOOP_COMPLETE] marker", fg="yellow"))
+        ir.needs_human = denials.denial_items(cr.permission_denials, "", 0, project_dir)
+        _echo_needs_human(ir.needs_human)
         return ir
 
     ir.status, ir.step, ir.commit, ir.blocker = typed.status, typed.step, typed.commit, typed.blocker
@@ -1581,15 +1592,32 @@ def _justloop_iteration_result(
     if typed.blocker:
         click.echo(click.style(f"  blocker: {typed.blocker[:200]}", fg="yellow"))
 
+    content = found = None
     if plan_path:
-        errors = []
         try:
             content = planfile.read_plan(plan_path)
         except OSError:
             content = None
         # Resolve the reported line to its numbered step (for notes and step records)
         found = planfile.find_step(content, typed.step) if content is not None and typed.step else None
-        if typed.status == "done":
+
+    # Review a done step before it is ticked. A plan step that cannot be
+    # ticked is not reviewed; the tick failure below handles it.
+    reviewable = not plan_path or (found is not None and not found.checked)
+    if typed.status == "done" and reviewer is not None and reviewable:
+        is_last = bool(plan_path) and content is not None and sum(
+            1 for s in planfile.list_steps(content) if not s.checked) == 1
+        outcome = reviewer.review(typed.step, found.number if found else 0, typed.commit, is_last)
+        if outcome is not None:
+            ir.cost_usd += outcome.cost_usd
+            ir.review = outcome.verdict
+            if outcome.verdict != "clean":
+                ir.status = "in_progress"
+                ir.review_findings = outcome.findings
+
+    if plan_path:
+        errors = []
+        if ir.status == "done":
             try:
                 idx = planfile.tick_step(plan_path, typed.step)
                 # The ticked line is authoritative when steps share text
@@ -1604,7 +1632,9 @@ def _justloop_iteration_result(
         if found is not None:
             ir.step_number = found.number
         try:
-            if found and typed.note:
+            if found and typed.note and ir.review == "findings":
+                planfile.append_note(plan_path, f"Step {found.number} (review findings): {typed.note}")
+            elif found and typed.note:
                 suffix = "" if ir.status == "done" else f" ({ir.status})"
                 planfile.append_note(plan_path, f"Step {found.number}{suffix}: {typed.note}")
             else:
@@ -1614,7 +1644,38 @@ def _justloop_iteration_result(
         if errors:
             ir.error = "; ".join(errors)
             click.echo(click.style(f"  ⚠ {ir.error}", fg="yellow"))
+
+    ir.needs_human = (
+        denials.denial_items(cr.permission_denials, ir.step, ir.step_number, project_dir)
+        + denials.model_items(typed.needs_human, ir.step, ir.step_number, project_dir)
+    )
+    _echo_needs_human(ir.needs_human)
     return ir
+
+
+def _echo_needs_human(items: list[dict]) -> None:
+    for item in items:
+        click.echo(click.style(f"  ⚠ needs a person: {denials.item_line(item)}", fg="yellow"))
+
+
+def _finish_needs_human(state: StateManager, ps: PhaseState) -> None:
+    """Print the run's "Needs a person" checklist and write it to .pralph/needs-human.md.
+
+    A run with nothing to hand off removes a checklist left by an earlier run.
+    """
+    path = state.state_dir / "needs-human.md"
+    try:
+        written = denials.write_checklist(path, ps.needs_human)
+    except OSError as e:
+        click.echo(click.style(f"  ⚠ could not write {path}: {e}", fg="yellow"))
+        written = False
+    if not ps.needs_human:
+        return
+    click.echo(click.style(f"\n  Needs a person ({len(ps.needs_human)}):", fg="yellow", bold=True))
+    for item in ps.needs_human:
+        click.echo(f"  - [ ] {denials.item_line(item)}")
+    if written:
+        click.echo(click.style(f"  written to {path}", dim=True))
 
 
 def _plan_has_unchecked(plan_path: str) -> bool:
@@ -1638,6 +1699,10 @@ def run_justloop(
     plan_file: str = "",
     max_step_attempts: int = steps.DEFAULT_MAX_STEP_ATTEMPTS,
     previous_state: PhaseState | None = None,
+    review_cmd: str = "",
+    review: str = "",
+    review_every: int = 1,
+    stop_on_denial: bool = False,
 ) -> PhaseState:
     """Run a simple prompt loop until completion.
 
@@ -1646,6 +1711,12 @@ def run_justloop(
     Step attempts and blockers are tracked per run and stop the loop on a
     repeated blocker or after ``max_step_attempts``. ``previous_state`` is the
     last run's phase state; a step it ended blocked on gets one retry.
+
+    ``review_cmd`` (a shell command) or ``review="fresh"`` (a read-only
+    ``claude -p`` session) reviews each done step before it is ticked.
+    Permission denials and the model's ``needs_human`` items are collected
+    and written to ``.pralph/needs-human.md`` at the end of the run;
+    ``stop_on_denial`` stops at the first denial.
     """
     import uuid
     from pathlib import Path
@@ -1670,6 +1741,14 @@ def run_justloop(
             return planfile.read_plan(plan_path)
         except OSError:
             return None
+
+    project_dir = str(state.project_dir)
+    reviewer = None
+    if review_cmd or review == "fresh":
+        reviewer = StepReviewer(
+            project_dir, cmd=review_cmd, fresh=not review_cmd, every=review_every,
+            model=model, verbose=verbose, max_budget_usd=max_budget_usd,
+        )
 
     carried = steps.carried_blocker(previous_state)
     if carried:
@@ -1709,7 +1788,7 @@ def run_justloop(
         )
 
         _clear_session_tracking(ps)
-        return _justloop_iteration_result(i, "execute", result, plan_path)
+        return _justloop_iteration_result(i, "execute", result, plan_path, reviewer, project_dir)
 
     def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
         result = run_with_retry(
@@ -1721,9 +1800,21 @@ def run_justloop(
             verbose=verbose,
             json_schema=schema,
         )
-        return _justloop_iteration_result(ps.current_iteration, "resume", result, plan_path)
+        return _justloop_iteration_result(ps.current_iteration, "resume", result, plan_path, reviewer, project_dir)
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
+        ps.needs_human = denials.merge_items(ps.needs_human, result.needs_human)
+        if result.review == "error":
+            ps.completion_reason = "review_error"
+            ps.last_error = f"review could not run: {result.review_findings}"[:500]
+            click.echo(click.style(f"  ✗ stopping: {ps.last_error}", fg="red", bold=True))
+            return True
+        refused = [n for n in result.needs_human if n.get("source") == "denied"]
+        if stop_on_denial and refused:
+            ps.completion_reason = "permission_denied"
+            ps.last_error = f"{denials.item_line(refused[0])}"[:500]
+            click.echo(click.style(f"  ✗ stopping on permission denial: {ps.last_error}", fg="red", bold=True))
+            return True
         if result.status == "nothing_left":
             ps.completion_reason = "loop_complete"
             return True
@@ -1744,4 +1835,6 @@ def run_justloop(
             return True
         return False
 
-    return _run_loop("justloop", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
+    ps = _run_loop("justloop", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
+    _finish_needs_human(state, ps)
+    return ps

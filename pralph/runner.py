@@ -11,8 +11,9 @@ import sys
 import time
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from pralph.denials import DenialCollector
 from pralph.terminal import (
     ProcessGroup,
     clear_timer_line,
@@ -44,6 +45,8 @@ class ClaudeResult:
     cache_creation_input_tokens: int = 0
     # Parsed --json-schema output; None when absent or not a JSON object
     structured_output: dict | None = None
+    # Refused tool calls: {"tool", "tool_input", "reason", "tool_use_id"}
+    permission_denials: list[dict] = field(default_factory=list)
 
 
 # Tools per phase
@@ -172,6 +175,7 @@ def run_claude(
 
     final_result: dict | None = None
     all_assistant_text: list[str] = []  # accumulate all assistant text blocks
+    denials = DenialCollector()
     deadline = time.monotonic() + timeout
     error_result: ClaudeResult | None = None
     buf = ""
@@ -293,6 +297,7 @@ def run_claude(
                     continue
 
                 etype = event.get("type", "")
+                denials.feed(event)
 
                 if etype == "result":
                     final_result = event
@@ -358,6 +363,7 @@ def run_claude(
         )
 
     result = _parse_result_event(final_result)
+    result.permission_denials = denials.denials()
     if not result.session_id:
         result.session_id = session_id
     # If the result event had no text but we captured assistant text during

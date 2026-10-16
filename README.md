@@ -227,6 +227,14 @@ pralph justloop --plan-file .pralph/loop-plan.md
 
 **Stop rules** — pralph tracks attempts per step within a run and tells each iteration which step is next, its attempt number and how the last attempt ended. It stops the run when the same blocker comes back on a step (`repeated_blocker`; blockers are compared after normalising case, numbers, hashes and paths) or when a step is still unfinished after `--max-step-attempts` tries (`step_attempts_exhausted`, default 3). If the previous run ended blocked on a step, the next run retries that step once and stops if it fails the same way.
 
+**Step review** — With `--review-cmd "<command>"`, pralph reviews each step the model reports `done` before ticking it. The command runs in the project directory with `PRALPH_STEP`, `PRALPH_STEP_NUMBER`, `PRALPH_COMMIT` and `PRALPH_BASE` (the last reviewed commit, so a re-review covers the step and its fixes) in the environment. Exit 0 means clean. Any other exit means findings, read from stdout (stderr if stdout is empty) and capped at 4,000 characters. On findings the step stays open, and the next iteration starts with "Fix these review findings for step N, then commit". A step whose reviews keep finding problems stops the run as `review_not_passing` after `--max-step-attempts`. A review command that cannot run (not found, killed, timed out after 30 minutes) stops the run as `review_error`; pralph never approves a step it could not review. `--review fresh` uses a built-in reviewer instead: a new `claude -p` session with read-only tools that sees only the step's diff and returns a typed verdict. `--review-every N` reviews every Nth done step (the plan's last step always), covering all steps since the last review. A done step with no new commit is not reviewed.
+
+```bash
+pralph justloop --plan-file .pralph/loop-plan.md --review-cmd "python3 scripts/headless_review.py"
+```
+
+**Needs a person** — Tool calls that Claude Code refuses (permission denials) and the actions the model reports in its `needs_human` field are collected with the step they came from. At the end of the run pralph prints a "Needs a person" checklist and writes it to `.pralph/needs-human.md` (deduplicated by tool and target; a run with nothing to hand off removes an old file). `--stop-on-denial` stops the run at the first refused tool call (`permission_denied`), for runs where a workaround would be worse than a stop.
+
 **Tip: review-driven fix loop** — A powerful pattern is to first run Claude Code's `/review` command on your codebase and have it write the issues to a file, then let justloop work through them one by one:
 
 ```bash
@@ -405,6 +413,10 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 | `--prompt` | — | Task prompt (alternative to positional args) |
 | `--plan-file` | — | Checklist plan file that pralph ticks and writes progress notes to |
 | `--max-step-attempts` | 3 | Stop when one step is still unfinished after this many attempts |
+| `--review-cmd` | — | Command that reviews each done step before it is ticked (exit 0 = clean, stdout = findings) |
+| `--review` | — | `fresh`: built-in review in a new read-only `claude` session |
+| `--review-every` | 1 | Review every Nth done step (the plan's last step always) |
+| `--stop-on-denial` | off | Stop at the first refused tool call |
 | `--reset` | off | Reset phase state and start fresh |
 
 #### `compound`

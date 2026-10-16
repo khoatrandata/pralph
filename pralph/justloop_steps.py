@@ -1,8 +1,9 @@
 """justloop step attempts and the stop rules enforced in code.
 
 Each typed iteration result updates a per-run StepRecord for the step it
-names. Stops: the same blocker twice on one step (``repeated_blocker``), and
-too many unfinished attempts on one step (``step_attempts_exhausted``).
+names. Stops: the same blocker twice on one step (``repeated_blocker``), too
+many unfinished attempts on one step (``step_attempts_exhausted``), or too
+many attempts that each left review findings (``review_not_passing``).
 Attempts count per run; a blocker from the previous run is carried over for
 one retry.
 """
@@ -14,6 +15,8 @@ from pralph import plan_file as planfile
 from pralph.models import IterationResult, PhaseState, StepRecord
 
 DEFAULT_MAX_STEP_ATTEMPTS = 3
+# Step key for review findings on a result that names no step (no plan file)
+UNNAMED_STEP = "the last unit of work"
 
 _TMP_ROOTS = ("/tmp/", "/private/tmp/", "/private/var/folders/", "/var/folders/")
 _PATH_RE = re.compile(r"(?:~|\.{1,2})?(?:/[\w.@+-]+)+/?|[\w.@+-]+(?:/[\w.@+-]+)+")
@@ -60,18 +63,25 @@ def step_key(step: str, number: int = 0) -> str:
 def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: int) -> str:
     """Update the step record from a typed result. Returns a stop reason or ''.
 
-    Results without a typed status or without a step are not tracked.
+    Results without a typed status are not tracked, nor are results without
+    a step unless they were reviewed.
     """
     key = step_key(result.step, result.step_number)
+    if not key and result.review:
+        key = UNNAMED_STEP
     if not result.status or not key:
         return ""
     rec = ps.steps.setdefault(key, StepRecord())
     rec.step_number = result.step_number
-    rec.text = step_key(result.step)
+    rec.text = step_key(result.step) or key
     ps.last_step = key
     rec.attempts += 1
     rec.last_status = result.status
     rec.last_blocker = result.blocker if result.status == "blocked" else ""
+    if result.review == "findings":
+        rec.review_findings = result.review_findings
+    elif result.status == "done":
+        rec.review_findings = ""
 
     if result.status in ("done", "nothing_left"):
         return ""
@@ -83,7 +93,7 @@ def record_step_result(ps: PhaseState, result: IterationResult, max_attempts: in
         rec.signatures.append(sig)
 
     if rec.attempts >= max_attempts:
-        return "step_attempts_exhausted"
+        return "review_not_passing" if rec.review_findings else "step_attempts_exhausted"
     return ""
 
 
@@ -93,6 +103,10 @@ def stop_message(ps: PhaseState, reason: str) -> str:
     label = _short_step_label(ps.last_step, rec)
     if reason == "repeated_blocker":
         return f"{label} hit the same blocker twice: {rec.last_blocker}"
+    if reason == "review_not_passing":
+        findings = " ".join(rec.review_findings.split())
+        findings = findings if len(findings) <= 300 else findings[:297] + "..."
+        return f"{label} still has review findings after {rec.attempts} attempts: {findings}"
     if reason == "step_attempts_exhausted":
         msg = f"{label} not finished after {rec.attempts} attempts (last status: {rec.last_status})"
         if rec.last_blocker:
@@ -136,6 +150,10 @@ def _step_label(key: str, rec: StepRecord) -> str:
     return f"step '{rec.text or key}'"
 
 
+def _findings_line(label: str, rec: StepRecord) -> str:
+    return f"Fix these review findings for {label}, then commit:\n{rec.review_findings}"
+
+
 def _prior_line(label: str, rec: StepRecord) -> str:
     return (f"The previous run stopped on {label} with: {rec.prior_blocker}. "
             "Try it once; if it fails the same way, report blocked.")
@@ -148,7 +166,7 @@ def build_step_context(
 
     With a plan file, names the next unchecked step, its attempt number and
     what happened last time. Without one, reports the last tracked step if it
-    was left blocked or in progress.
+    was left blocked or in progress. Open review findings lead the context.
     """
     lines: list[str] = []
     header = ""
@@ -160,18 +178,26 @@ def build_step_context(
         rec = ps.steps.get(step_key(nxt.line, nxt.number), StepRecord())
         attempt = rec.attempts + 1
         header = f"step {nxt.number}, attempt {attempt}/{max_attempts}"
+        if rec.review_findings:
+            header += " (review fixes)"
+            lines.append(_findings_line(f"step {nxt.number}", rec))
+            lines.append("")
         lines.append(f"Next step: step {nxt.number}, attempt {attempt} of {max_attempts}.")
         lines.append(f"Step line: {nxt.line.strip()}")
         if rec.last_status == "blocked":
             lines.append(f"Last attempt was blocked: {rec.last_blocker}")
-        elif rec.last_status == "in_progress":
+        elif rec.last_status == "in_progress" and not rec.review_findings:
             lines.append("Last attempt ended in progress; continue it.")
         if rec.prior_blocker and rec.attempts == 0:
             lines.append(_prior_line(f"step {nxt.number}", rec))
         return "\n".join(lines), header
 
     rec = ps.steps.get(ps.last_step) if ps.last_step else None
-    if rec and rec.last_status in ("blocked", "in_progress"):
+    if rec and rec.review_findings:
+        header = f"{ps.last_step[:40]}, attempt {rec.attempts + 1}/{max_attempts} (review fixes)"
+        label = _step_label(ps.last_step, rec) if ps.last_step != UNNAMED_STEP else UNNAMED_STEP
+        lines.append(_findings_line(label, rec))
+    elif rec and rec.last_status in ("blocked", "in_progress"):
         header = f"{ps.last_step[:40]}, attempt {rec.attempts + 1}/{max_attempts}"
         line = f"The last iteration worked on {_step_label(ps.last_step, rec)} (attempt {rec.attempts}) and reported {rec.last_status}"
         lines.append(line + (f": {rec.last_blocker}" if rec.last_blocker else "."))
