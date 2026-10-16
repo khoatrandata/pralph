@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from pralph.models import Story
+from pralph.models import LOOP_STATUSES, LoopResult, Story
 
 
 def extract_json_from_text(text: str) -> Any | None:
@@ -284,3 +284,48 @@ def parse_review_output(text: str) -> dict[str, Any]:
         "feedback": "Review output could not be parsed — rejecting for re-review",
         "issues": [],
     }
+
+
+# ── Justloop typed result ─────────────────────────────────────────────
+
+# Schema passed to `claude -p --json-schema` for every justloop iteration.
+JUSTLOOP_RESULT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "step": {"type": "string"},
+        "status": {"type": "string", "enum": list(LOOP_STATUSES)},
+        "commit": {"type": "string"},
+        "note": {"type": "string"},
+        "blocker": {"type": "string"},
+        "needs_human": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["step", "status", "commit", "note", "blocker", "needs_human"],
+    "additionalProperties": False,
+}
+
+
+def parse_loop_result(data: dict | None) -> LoopResult | None:
+    """Turn a structured_output object into a LoopResult.
+
+    Returns None when the object is missing or its status is not one of
+    LOOP_STATUSES, so the caller falls back to the [LOOP_COMPLETE] marker.
+    """
+    if not isinstance(data, dict):
+        return None
+    status = data.get("status")
+    if status not in LOOP_STATUSES:
+        return None
+
+    def _str(key: str) -> str:
+        v = data.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    needs = data.get("needs_human")
+    return LoopResult(
+        status=status,
+        step=_str("step"),
+        commit=_str("commit"),
+        note=_str("note"),
+        blocker=_str("blocker"),
+        needs_human=[n for n in needs if isinstance(n, str) and n.strip()] if isinstance(needs, list) else [],
+    )

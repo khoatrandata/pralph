@@ -42,6 +42,8 @@ class ClaudeResult:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    # Parsed --json-schema output; None when absent or not a JSON object
+    structured_output: dict | None = None
 
 
 # Tools per phase
@@ -89,6 +91,7 @@ def run_claude(
     project_dir: str | None = None,
     resume_session_id: str | None = None,
     session_id: str | None = None,
+    json_schema: str | None = None,
 ) -> ClaudeResult:
     """Invoke claude -p as a subprocess with streaming output.
 
@@ -103,6 +106,8 @@ def run_claude(
         ]
         if dangerously_skip_permissions:
             cmd.append("--dangerously-skip-permissions")
+        if json_schema:
+            cmd.extend(["--json-schema", json_schema])
     else:
         session_id = session_id or str(uuid.uuid4())
         cmd = [
@@ -122,6 +127,9 @@ def run_claude(
 
         if max_budget_usd is not None:
             cmd.extend(["--max-budget-usd", str(max_budget_usd)])
+
+        if json_schema:
+            cmd.extend(["--json-schema", json_schema])
 
     cwd = project_dir or None
 
@@ -381,7 +389,22 @@ def _parse_result_event(data: dict) -> ClaudeResult:
         output_tokens=usage.get("output_tokens", 0),
         cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
         cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
+        structured_output=_parse_structured_output(data.get("structured_output")),
     )
+
+
+def _parse_structured_output(raw: object) -> dict | None:
+    """Read the result event's ``structured_output`` (set by --json-schema).
+
+    The CLI emits it as an object; a JSON string is accepted too. Anything
+    else (missing, malformed, not an object) returns None so callers fall back.
+    """
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    return raw if isinstance(raw, dict) else None
 
 
 def _print_event(event: dict, verbose: bool) -> None:

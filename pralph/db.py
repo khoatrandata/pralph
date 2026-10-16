@@ -92,15 +92,25 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             cache_read_input_tokens INTEGER DEFAULT 0,
             cache_creation_input_tokens INTEGER DEFAULT 0,
             session_id TEXT DEFAULT '',
+            status TEXT DEFAULT '',
+            step TEXT DEFAULT '',
+            "commit" TEXT DEFAULT '',
+            blocker TEXT DEFAULT '',
+            step_number INTEGER DEFAULT 0,
             logged_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
 
-    # Migration: add session_id column if missing (existing DBs)
+    # Migration: add columns missing from existing DBs
+    for col in ("session_id", "status", "step", "commit", "blocker"):
+        try:
+            conn.execute(f'SELECT "{col}" FROM run_log LIMIT 0')
+        except Exception:
+            conn.execute(f'ALTER TABLE run_log ADD COLUMN "{col}" TEXT DEFAULT \'\'')
     try:
-        conn.execute("SELECT session_id FROM run_log LIMIT 0")
+        conn.execute("SELECT step_number FROM run_log LIMIT 0")
     except Exception:
-        conn.execute("ALTER TABLE run_log ADD COLUMN session_id TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE run_log ADD COLUMN step_number INTEGER DEFAULT 0")
 
 
     conn.execute("""
@@ -118,9 +128,18 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             active_session_id TEXT DEFAULT '',
             active_story_id TEXT DEFAULT '',
             active_session_started TEXT DEFAULT '',
+            steps TEXT DEFAULT '{}',
+            last_step TEXT DEFAULT '',
             PRIMARY KEY (project_id, phase)
         )
     """)
+
+    # Migration: justloop step records (existing DBs)
+    for col, default in (("steps", "'{}'"), ("last_step", "''")):
+        try:
+            conn.execute(f"SELECT {col} FROM phase_state LIMIT 0")
+        except Exception:
+            conn.execute(f"ALTER TABLE phase_state ADD COLUMN {col} TEXT DEFAULT {default}")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS phase1_analysis (

@@ -14,7 +14,11 @@ from pralph.prompts.implement import (
 from pralph.prompts.review import REVIEW_PROMPT
 from pralph.prompts.plan import INITIAL_PLAN_PROMPT, ITERATION_PROMPT_TEMPLATE
 from pralph.prompts.ideate import ADD_STORY_PROMPT, IDEATE_PROMPT, REFINE_PROMPT
-from pralph.prompts.justloop import JUSTLOOP_PROMPT
+from pralph.prompts.justloop import (
+    JUSTLOOP_COMPLETION_PLAIN,
+    JUSTLOOP_COMPLETION_PLAN_FILE,
+    JUSTLOOP_PROMPT,
+)
 from pralph.prompts.stories import (
     PLANNING_EXTRACT_PROMPT,
     PLANNING_RESEARCH_PROMPT,
@@ -541,10 +545,24 @@ def assemble_justloop_prompt(
     *,
     user_prompt: str,
     phase_state: PhaseState | None = None,
+    plan_file: str = "",
+    step_context: str = "",
 ) -> str:
-    """Build the prompt for a justloop iteration."""
+    """Build the prompt for a justloop iteration.
+
+    Templates may use {{user_prompt}}, {{completion_section}} (the structured
+    result instructions) and {{plan_file}}. A custom template without
+    {{completion_section}} gets the section appended.
+    """
     resume = _build_resume_context(phase_state)
 
+    completion = JUSTLOOP_COMPLETION_PLAN_FILE if plan_file else JUSTLOOP_COMPLETION_PLAIN
     prompt = state.resolve_prompt_template("justloop", JUSTLOOP_PROMPT)
+    if "{{completion_section}}" not in prompt:
+        prompt = prompt.rstrip("\n") + "\n\n{{completion_section}}\n"
+    prompt = _safe_sub(prompt, "completion_section", completion)
+    prompt = _safe_sub(prompt, "plan_file", _escape_template_vars(plan_file))
     prompt = _safe_sub(prompt, "user_prompt", _escape_template_vars(user_prompt))
+    if step_context:
+        prompt += "\n## Step Context\n\n" + step_context + "\n"
     return prompt + resume

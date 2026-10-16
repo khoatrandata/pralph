@@ -22,12 +22,16 @@ from pralph.assembler import (
 from pralph.compound import run_compound_capture
 from pralph.models import IterationResult, PhaseState, Story, StoryStatus
 from pralph.parallel import FOUNDATION_CATEGORIES, sort_stories, run_parallel_implement
+from pralph import justloop_steps as steps
+from pralph import plan_file as planfile
 from pralph.parser import (
+    JUSTLOOP_RESULT_SCHEMA,
     detect_completion_signal,
     detect_ideation_complete,
     detect_loop_complete,
     extract_json_from_text,
     parse_implement_output,
+    parse_loop_result,
     parse_plan_output,
     parse_stories_output,
     reconcile_dependencies,
@@ -1539,6 +1543,87 @@ def _implement_single(
 # ── Justloop ─────────────────────────────────────────────────────────
 
 
+def _justloop_iteration_result(
+    i: int, mode: str, cr: ClaudeResult, plan_path: str = "",
+) -> IterationResult:
+    """Build a justloop IterationResult from a ClaudeResult.
+
+    Reads the typed result from structured output. With a plan file, pralph
+    ticks the reported step on ``done`` and appends the note. A step that
+    cannot be ticked is recorded in ``error`` (the iteration still counts as
+    a success, since the model's work happened).
+    """
+    if not cr.success:
+        return IterationResult(
+            iteration=i, phase="justloop", mode=mode,
+            success=False, error=cr.error, cost_usd=cr.cost_usd,
+            **_token_kwargs(cr),
+        )
+
+    ir = IterationResult(
+        iteration=i, phase="justloop", mode=mode,
+        success=True, raw_output=cr.result,
+        cost_usd=cr.cost_usd,
+        **_token_kwargs(cr),
+    )
+    typed = parse_loop_result(cr.structured_output)
+    if typed is None:
+        click.echo(click.style("  ⚠ no structured result — falling back to [LOOP_COMPLETE] marker", fg="yellow"))
+        return ir
+
+    ir.status, ir.step, ir.commit, ir.blocker = typed.status, typed.step, typed.commit, typed.blocker
+    label = f"  status: {typed.status}"
+    if typed.step:
+        label += f" — {planfile.step_text(typed.step)}"
+    if typed.commit:
+        label += f" ({typed.commit[:10]})"
+    click.echo(click.style(label, fg="cyan"))
+    if typed.blocker:
+        click.echo(click.style(f"  blocker: {typed.blocker[:200]}", fg="yellow"))
+
+    if plan_path:
+        errors = []
+        try:
+            content = planfile.read_plan(plan_path)
+        except OSError:
+            content = None
+        # Resolve the reported line to its numbered step (for notes and step records)
+        found = planfile.find_step(content, typed.step) if content is not None and typed.step else None
+        if typed.status == "done":
+            try:
+                idx = planfile.tick_step(plan_path, typed.step)
+                # The ticked line is authoritative when steps share text
+                found = planfile.step_at_line(content, idx) if content is not None else None
+            except (planfile.PlanFileError, OSError) as e:
+                errors.append(f"plan_file: {e}")
+                # Nothing was ticked: count this as an unfinished attempt on the
+                # plan's next step, so --max-step-attempts still applies.
+                nxt = planfile.next_step(content) if content is not None else None
+                if nxt is not None:
+                    ir.status, ir.step, found = "in_progress", nxt.line, nxt
+        if found is not None:
+            ir.step_number = found.number
+        try:
+            if found and typed.note:
+                suffix = "" if ir.status == "done" else f" ({ir.status})"
+                planfile.append_note(plan_path, f"Step {found.number}{suffix}: {typed.note}")
+            else:
+                planfile.append_note(plan_path, typed.note)
+        except OSError as e:
+            errors.append(f"plan_file: {e}")
+        if errors:
+            ir.error = "; ".join(errors)
+            click.echo(click.style(f"  ⚠ {ir.error}", fg="yellow"))
+    return ir
+
+
+def _plan_has_unchecked(plan_path: str) -> bool:
+    try:
+        return planfile.next_step(planfile.read_plan(plan_path)) is not None
+    except OSError:
+        return True
+
+
 def run_justloop(
     state: StateManager,
     *,
@@ -1550,17 +1635,59 @@ def run_justloop(
     verbose: bool = False,
     dangerously_skip_permissions: bool = False,
     max_budget_usd: float | None = None,
+    plan_file: str = "",
+    max_step_attempts: int = steps.DEFAULT_MAX_STEP_ATTEMPTS,
+    previous_state: PhaseState | None = None,
 ) -> PhaseState:
-    """Run a simple prompt loop until completion."""
+    """Run a simple prompt loop until completion.
+
+    Each iteration ends with a typed result (``--json-schema``). With
+    ``plan_file``, pralph ticks steps and writes progress notes itself.
+    Step attempts and blockers are tracked per run and stop the loop on a
+    repeated blocker or after ``max_step_attempts``. ``previous_state`` is the
+    last run's phase state; a step it ended blocked on gets one retry.
+    """
     import uuid
+    from pathlib import Path
 
     system_prompt = build_guardrails_system_prompt("implement", state)
     tools = JUSTLOOP_TOOLS
     if extra_tools:
         tools = f"{tools},{extra_tools}"
+    schema = json.dumps(JUSTLOOP_RESULT_SCHEMA)
+
+    # plan_path is what pralph edits; the prompt shows the path as the user gave it
+    plan_path = ""
+    if plan_file:
+        p = Path(plan_file)
+        plan_path = str(p if p.is_absolute() else Path(state.project_dir) / p)
+    plan_display = plan_file
+
+    def _plan_content() -> str | None:
+        if not plan_path:
+            return None
+        try:
+            return planfile.read_plan(plan_path)
+        except OSError:
+            return None
+
+    carried = steps.carried_blocker(previous_state)
+    if carried:
+        step, blocker = carried
+        ps0 = state.load_phase_state("justloop")
+        steps.seed_carried_blocker(ps0, step, blocker, previous_state.steps.get(step))
+        state.save_phase_state(ps0)
+        click.echo(click.style(f"  previous run stopped on {step!r} with: {blocker[:200]}", fg="yellow"))
+        click.echo(click.style("  retrying it once", fg="yellow"))
 
     def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
-        prompt = assemble_justloop_prompt(state, user_prompt=user_prompt, phase_state=ps)
+        step_context, header = steps.build_step_context(ps, max_step_attempts, _plan_content())
+        if header:
+            click.echo(click.style(f"  {header}", fg="cyan"))
+        prompt = assemble_justloop_prompt(
+            state, user_prompt=user_prompt, phase_state=ps, plan_file=plan_display,
+            step_context=step_context,
+        )
 
         sid = str(uuid.uuid4())
         ps.active_session_id = sid
@@ -1578,23 +1705,11 @@ def run_justloop(
             verbose=verbose,
             project_dir=str(state.project_dir),
             session_id=sid,
+            json_schema=schema,
         )
 
         _clear_session_tracking(ps)
-
-        if not result.success:
-            return IterationResult(
-                iteration=i, phase="justloop", mode="execute",
-                success=False, error=result.error, cost_usd=result.cost_usd,
-                **_token_kwargs(result),
-            )
-
-        return IterationResult(
-            iteration=i, phase="justloop", mode="execute",
-            success=True, raw_output=result.result,
-            cost_usd=result.cost_usd,
-            **_token_kwargs(result),
-        )
+        return _justloop_iteration_result(i, "execute", result, plan_path)
 
     def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
         result = run_with_retry(
@@ -1604,22 +1719,24 @@ def run_justloop(
             project_dir=str(state.project_dir),
             dangerously_skip_permissions=dangerously_skip_permissions,
             verbose=verbose,
+            json_schema=schema,
         )
-        if not result.success:
-            return IterationResult(
-                iteration=ps.current_iteration, phase="justloop", mode="resume",
-                success=False, error=result.error, cost_usd=result.cost_usd,
-                **_token_kwargs(result),
-            )
-        return IterationResult(
-            iteration=ps.current_iteration, phase="justloop", mode="resume",
-            success=True, raw_output=result.result,
-            cost_usd=result.cost_usd,
-            **_token_kwargs(result),
-        )
+        return _justloop_iteration_result(ps.current_iteration, "resume", result, plan_path)
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
-        if result.raw_output and detect_loop_complete(result.raw_output):
+        if result.status == "nothing_left":
+            ps.completion_reason = "loop_complete"
+            return True
+        stop = steps.record_step_result(ps, result, max_step_attempts)
+        if stop:
+            ps.completion_reason = stop
+            ps.last_error = steps.stop_message(ps, stop)[:500]
+            click.echo(click.style(f"  ✗ stopping: {ps.last_error}", fg="red", bold=True))
+            return True
+        if not result.status and result.raw_output and detect_loop_complete(result.raw_output):
+            ps.completion_reason = "loop_complete"
+            return True
+        if plan_path and result.status == "done" and not _plan_has_unchecked(plan_path):
             ps.completion_reason = "loop_complete"
             return True
         if ps.consecutive_errors >= 5:

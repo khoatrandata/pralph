@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from pralph.models import IterationResult, PhaseState, Story, StoryStatus
+from pralph.models import IterationResult, PhaseState, Story, StoryStatus, steps_from_dict
 
 
 def _row_to_story(row: tuple, columns: list[str]) -> Story:
@@ -402,6 +402,8 @@ class DbStateMixin:
             active_session_id=d.get("active_session_id", ""),
             active_story_id=d.get("active_story_id", ""),
             active_session_started=d.get("active_session_started", ""),
+            steps=steps_from_dict(json.loads(d.get("steps") or "{}")),
+            last_step=d.get("last_step") or "",
         )
 
     def save_phase_state(self, state: PhaseState) -> None:
@@ -411,8 +413,8 @@ class DbStateMixin:
                    (project_id, phase, current_iteration, consecutive_empty,
                     consecutive_errors, completed, completion_reason, total_cost_usd,
                     last_error, last_summary, active_session_id, active_story_id,
-                    active_session_started)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    active_session_started, steps, last_step)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     state.phase,
@@ -427,6 +429,8 @@ class DbStateMixin:
                     state.active_session_id,
                     state.active_story_id,
                     state.active_session_started,
+                    json.dumps({k: v.to_dict() for k, v in state.steps.items()}),
+                    state.last_step,
                 ],
             )
 
@@ -449,8 +453,9 @@ class DbStateMixin:
                    (project_id, iteration, phase, mode, success, stories_generated,
                     impl_status, error, duration, cost_usd, story_id,
                     input_tokens, output_tokens, cache_read_input_tokens,
-                    cache_creation_input_tokens, session_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    cache_creation_input_tokens, session_id,
+                    status, step, "commit", blocker, step_number)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     result.iteration,
@@ -468,6 +473,11 @@ class DbStateMixin:
                     result.cache_read_input_tokens,
                     result.cache_creation_input_tokens,
                     result.session_id,
+                    result.status,
+                    result.step,
+                    result.commit,
+                    result.blocker,
+                    result.step_number,
                 ],
             )
 
@@ -480,7 +490,8 @@ class DbStateMixin:
                     """SELECT iteration, phase, mode, success, stories_generated,
                               impl_status, error, duration, cost_usd, story_id,
                               input_tokens, output_tokens, cache_read_input_tokens,
-                              cache_creation_input_tokens, session_id, logged_at
+                              cache_creation_input_tokens, session_id,
+                              status, step, "commit", blocker, step_number, logged_at
                        FROM run_log WHERE project_id = ?
                        ORDER BY logged_at""",
                     [self.project_id],  # type: ignore[attr-defined]
