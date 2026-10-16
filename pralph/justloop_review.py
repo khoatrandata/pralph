@@ -69,9 +69,10 @@ def run_review_cmd(
     cmd: str, project_dir: str, *, step: str, step_number: int, commit: str, base: str,
     timeout: int = REVIEW_TIMEOUT,
 ) -> ReviewOutcome:
-    """Run a user review command. Exit 0 is clean; other exits are findings.
+    """Run a user review command. Exit 0 is clean; exit 1 is findings.
 
-    The command not starting (exit 126/127), a signal or a timeout is an error.
+    Any other exit (the review did not complete, a limit stopped it, the
+    command was not found), a signal or a timeout is an error.
     """
     env = dict(os.environ)
     env.update({
@@ -101,7 +102,7 @@ def run_review_cmd(
     if proc.returncode == 0:
         return ReviewOutcome("clean")
     stderr_tail = (stderr or "").strip()[-500:]
-    if proc.returncode < 0 or proc.returncode in (126, 127):
+    if proc.returncode != 1:
         detail = f": {stderr_tail}" if stderr_tail else ""
         return ReviewOutcome("error", f"review command exited {proc.returncode}{detail}")
     findings = (stdout or "").strip() or stderr_tail

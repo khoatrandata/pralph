@@ -1807,6 +1807,9 @@ def run_justloop(
         if result.review == "error":
             ps.completion_reason = "review_error"
             ps.last_error = f"review could not run: {result.review_findings}"[:500]
+            ps.needs_human = denials.merge_items(ps.needs_human, denials.model_items(
+                [f"Review of this step did not complete; resolve it and re-run: {result.review_findings}"],
+                result.step, result.step_number, project_dir))
             click.echo(click.style(f"  ✗ stopping: {ps.last_error}", fg="red", bold=True))
             return True
         refused = [n for n in result.needs_human if n.get("source") == "denied"]

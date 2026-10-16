@@ -93,7 +93,7 @@ class TestReviewCommandLoop:
     def test_review_never_passing_stops_at_cap(self, jsonl_state, repo, monkeypatch):
         steps = [("- [ ] one", f"a{i}.py", "done") for i in range(3)]
         ps, calls = _run(jsonl_state, monkeypatch, steps, plan_file="loop-plan.md",
-                         review_cmd="echo nope; exit 2", max_step_attempts=3)
+                         review_cmd="echo nope; exit 1", max_step_attempts=3)
         assert len(calls) == 3
         assert ps.completion_reason == "review_not_passing"
 
@@ -122,6 +122,22 @@ class TestReviewCommandLoop:
         assert ps.completion_reason == "review_error"
         assert "exited 127" in ps.last_error
         assert "- [ ] one" in (repo / "loop-plan.md").read_text()  # never auto-approved
+
+    @pytest.mark.parametrize("code", [2, 3])
+    def test_other_exit_codes_are_errors(self, jsonl_state, repo, monkeypatch, code):
+        steps = [("- [ ] one", "a.py", "done")]
+        ps, calls = _run(jsonl_state, monkeypatch, steps, plan_file="loop-plan.md",
+                         review_cmd=f"echo 'round limit reached' >&2; exit {code}")
+        assert len(calls) == 1
+        assert ps.completion_reason == "review_error"
+        assert f"exited {code}: round limit reached" in ps.last_error
+        assert "- [ ] one" in (repo / "loop-plan.md").read_text()
+        checklist = (repo / ".pralph" / "needs-human.md").read_text()
+        assert "Review of this step did not complete" in checklist and "(step 1)" in checklist
+
+    def test_findings_on_stderr_when_stdout_empty(self, repo):
+        out = jr.run_review_cmd("echo 'fix x' >&2; exit 1", str(repo), step="s", step_number=1, commit="c", base="b")
+        assert out.verdict == "findings" and out.findings == "fix x"
 
     def test_review_timeout_is_an_error(self, repo):
         out = jr.run_review_cmd("sleep 30", str(repo), step="s", step_number=1, commit="c", base="b", timeout=1)

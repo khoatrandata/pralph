@@ -627,8 +627,8 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
 @click.option("--max-step-attempts", default=3, show_default=True, type=click.IntRange(min=1),
               help="Stop when one step is still unfinished after this many attempts")
 @click.option("--review-cmd", default=None,
-              help="Command that reviews each done step before it is ticked (exit 0 = clean; "
-                   "stdout = findings). Gets PRALPH_STEP, PRALPH_COMMIT and PRALPH_BASE")
+              help="Command that reviews each done step before it is ticked (exit 0 = clean, "
+                   "1 = findings on stdout, other = error). Gets PRALPH_STEP, PRALPH_COMMIT and PRALPH_BASE")
 @click.option("--review", "review_mode", default=None, type=click.Choice(["fresh"]),
               help="Built-in review of each done step in a fresh read-only claude session")
 @click.option("--review-every", default=1, show_default=True, type=click.IntRange(min=1),

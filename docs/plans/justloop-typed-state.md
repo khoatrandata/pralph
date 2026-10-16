@@ -95,7 +95,7 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 **Implemented** on `feat/justloop-review-denials`. Differences from the design below:
 - The review base is the last cleanly reviewed commit, so a re-review after findings covers the step and its fixes together. The base starts at HEAD when the run starts.
 - A done step with no new commit since the base is not reviewed and is ticked.
-- Exit codes 126 and 127, a signal, or a timeout (30 minutes, which kills the command's process group) count as `review_error`.
+- Only exit 1 means findings. Any other non-zero exit, a signal, or a timeout (30 minutes, which kills the command's process group) is `review_error`, and the error is added to the "Needs a person" list. This matches platform-data-lake's `scripts/headless_review.py`: 0 is a 10/10, 1 is below 10, 2 is a review that did not complete and 3 is a limit that needs a person.
 - The findings lead the iteration's "Step Context" section, which comes after the task, rather than the very top of the prompt.
 - Without a plan file, findings are tracked under the step name "the last unit of work".
 - `--review-every N` always reviews the plan's last step.
