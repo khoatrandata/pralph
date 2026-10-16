@@ -457,8 +457,8 @@ class DbStateMixin:
                     input_tokens, output_tokens, cache_read_input_tokens,
                     cache_creation_input_tokens, session_id,
                     status, step, "commit", blocker, step_number,
-                    review, review_findings, needs_human)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    review, review_findings, needs_human, model, context)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     result.iteration,
@@ -484,6 +484,8 @@ class DbStateMixin:
                     result.review,
                     result.review_findings,
                     json.dumps(result.needs_human) if result.needs_human else "",
+                    result.model,
+                    json.dumps(result.context) if result.context else "",
                 ],
             )
 
@@ -498,7 +500,7 @@ class DbStateMixin:
                               input_tokens, output_tokens, cache_read_input_tokens,
                               cache_creation_input_tokens, session_id,
                               status, step, "commit", blocker, step_number,
-                              review, review_findings, needs_human, logged_at
+                              review, review_findings, needs_human, model, context, logged_at
                        FROM run_log WHERE project_id = ?
                        ORDER BY logged_at""",
                     [self.project_id],  # type: ignore[attr-defined]

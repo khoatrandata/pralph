@@ -26,6 +26,7 @@ from pralph import denials
 from pralph import justloop_steps as steps
 from pralph import plan_file as planfile
 from pralph.justloop_review import StepReviewer
+from pralph import plan_context as plancx
 from pralph.parser import (
     JUSTLOOP_RESULT_SCHEMA,
     detect_completion_signal,
@@ -1678,6 +1679,21 @@ def _finish_needs_human(state: StateManager, ps: PhaseState) -> None:
         click.echo(click.style(f"  written to {path}", dim=True))
 
 
+def _step_model(step: planfile.PlanStep | None, default: str) -> str:
+    """The model a step's ``(model: X)`` tag asks for, else ``default``.
+
+    An unknown model name is reported and ignored, so the run goes on.
+    """
+    tag = plancx.model_tag(step.text) if step is not None else ""
+    if not tag:
+        return default
+    if not plancx.valid_model(tag):
+        click.echo(click.style(
+            f"  ⚠ step {step.number}: unknown model {tag!r} in its tag, using {default}", fg="yellow"))
+        return default
+    return tag
+
+
 def _plan_has_unchecked(plan_path: str) -> bool:
     try:
         return planfile.next_step(planfile.read_plan(plan_path)) is not None
@@ -1703,6 +1719,7 @@ def run_justloop(
     review: str = "",
     review_every: int = 1,
     stop_on_denial: bool = False,
+    review_model: str = "",
 ) -> PhaseState:
     """Run a simple prompt loop until completion.
 
@@ -1717,6 +1734,10 @@ def run_justloop(
     Permission denials and the model's ``needs_human`` items are collected
     and written to ``.pralph/needs-human.md`` at the end of the run;
     ``stop_on_denial`` stops at the first denial.
+
+    With a plan file, each prompt carries the plan's rules, the current step
+    and the notes relevant to it (the whole file when its layout is not
+    recognised), and a step tagged ``(model: X)`` runs on model X.
     """
     import uuid
     from pathlib import Path
@@ -1747,7 +1768,7 @@ def run_justloop(
     if review_cmd or review == "fresh":
         reviewer = StepReviewer(
             project_dir, cmd=review_cmd, fresh=not review_cmd, every=review_every,
-            model=model, verbose=verbose, max_budget_usd=max_budget_usd,
+            model=review_model or model, verbose=verbose, max_budget_usd=max_budget_usd,
         )
 
     carried = steps.carried_blocker(previous_state)
@@ -1760,9 +1781,20 @@ def run_justloop(
         click.echo(click.style("  retrying it once", fg="yellow"))
 
     def iteration_fn(i: int, ps: PhaseState) -> IterationResult:
-        step_context, header = steps.build_step_context(ps, max_step_attempts, _plan_content())
-        if header:
-            click.echo(click.style(f"  {header}", fg="cyan"))
+        content = _plan_content()
+        nxt = planfile.next_step(content) if content is not None else None
+        iter_model = _step_model(nxt, model)
+        step_context, header = steps.build_step_context(
+            ps, max_step_attempts, content, show_step_line=nxt is None,
+        )
+        pc = None
+        if content is not None:
+            pc = plancx.build_plan_context(content, nxt, plan_display, record=step_context)
+            step_context = pc.text
+        click.echo(click.style(f"  {header + ', ' if header else ''}model {iter_model}", fg="cyan"))
+        if pc is not None:
+            shown = f"notes {pc.note_ids}" if pc.focused else "whole file (layout not recognised)"
+            click.echo(click.style(f"  plan context: {shown}, {pc.chars} chars", dim=True))
         prompt = assemble_justloop_prompt(
             state, user_prompt=user_prompt, phase_state=ps, plan_file=plan_display,
             step_context=step_context,
@@ -1775,7 +1807,7 @@ def run_justloop(
 
         result = run_with_retry(
             prompt,
-            model=model,
+            model=iter_model,
             allowed_tools=tools,
             system_prompt=system_prompt,
             dangerously_skip_permissions=dangerously_skip_permissions,
@@ -1788,7 +1820,11 @@ def run_justloop(
         )
 
         _clear_session_tracking(ps)
-        return _justloop_iteration_result(i, "execute", result, plan_path, reviewer, project_dir)
+        ir = _justloop_iteration_result(i, "execute", result, plan_path, reviewer, project_dir)
+        ir.model = iter_model
+        if pc is not None:
+            ir.context = pc.summary()
+        return ir
 
     def resume_fn(session_id: str, ps: PhaseState) -> IterationResult:
         result = run_with_retry(

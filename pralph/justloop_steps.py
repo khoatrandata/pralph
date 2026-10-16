@@ -161,12 +161,15 @@ def _prior_line(label: str, rec: StepRecord) -> str:
 
 def build_step_context(
     ps: PhaseState, max_attempts: int, plan_content: str | None = None,
+    show_step_line: bool = True,
 ) -> tuple[str, str]:
     """Context for the next iteration: (prompt text, short header label).
 
     With a plan file, names the next unchecked step, its attempt number and
     what happened last time. Without one, reports the last tracked step if it
     was left blocked or in progress. Open review findings lead the context.
+    ``show_step_line`` False leaves out the step line, for a prompt that
+    already shows the step.
     """
     lines: list[str] = []
     header = ""
@@ -183,7 +186,8 @@ def build_step_context(
             lines.append(_findings_line(f"step {nxt.number}", rec))
             lines.append("")
         lines.append(f"Next step: step {nxt.number}, attempt {attempt} of {max_attempts}.")
-        lines.append(f"Step line: {nxt.line.strip()}")
+        if show_step_line:
+            lines.append(f"Step line: {nxt.line.strip()}")
         if rec.last_status == "blocked":
             lines.append(f"Last attempt was blocked: {rec.last_blocker}")
         elif rec.last_status == "in_progress" and not rec.review_findings:

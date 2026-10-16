@@ -219,7 +219,11 @@ pralph justloop --reset "migrate database schema to v2"
 
 Each iteration has full tool access (Read, Write, Edit, Bash, Glob, Grep) and resume context from prior iterations. Every iteration ends with a typed result (via `claude -p --json-schema`): the step worked on, a status (`done`, `in_progress`, `blocked` or `nothing_left`), the commit, a one-line note, the blocker text and any actions that need a person. The status, step, commit and blocker are saved in the run log. The loop terminates when an iteration reports `nothing_left`, after 5 consecutive errors, or when max iterations is reached. If an iteration returns no typed result, the old `[LOOP_COMPLETE]` marker still ends the loop.
 
-**Plan files** — With `--plan-file PATH`, pralph manages a checklist plan (rules, `- [ ]` steps, and a "Progress notes" section). The model works on the next unchecked step and reports it; pralph ticks that exact line when the step is `done`, appends the model's note under "Progress notes" (prefixed with the step number, e.g. "Step 3 (blocked): ..."), and stops once every top-level step is ticked. pralph does not commit these edits: keep the plan file git-ignored (as under `.pralph/`) or commit it yourself, otherwise the working tree shows it as modified. A reported step that isn't in the file is recorded as an error in the run log. Without a prompt, the task defaults to "Read PATH and do the next unchecked step."
+**Plan files** — With `--plan-file PATH`, pralph manages a checklist plan (rules, `- [ ]` steps, and a "Progress notes" section). The model works on the next unchecked step and reports it; pralph ticks that exact line when the step is `done`, appends the model's note under "Progress notes" (prefixed with the step number, e.g. "Step 3 (blocked): ..."), and stops once every top-level step is ticked. pralph does not commit these edits: keep the plan file git-ignored (as under `.pralph/`) or commit it yourself, otherwise the working tree shows it as modified. A reported step that isn't in the file is recorded as an error in the run log. Without a prompt, the task defaults to "Do the current step of the plan in PATH."
+
+**Focused context** — With a plan file, each iteration's prompt carries the plan's Rules section, the current step with its indented sub-bullets, that step's attempts and review findings, and the relevant progress notes, instead of the whole file. Relevant notes are the last two plus any earlier note that names a file path, ticket key (e.g. `EFF-3173`) or identifier from the current step, newest first, within about 3,000 characters. The model can still read the full file when a step refers to earlier work. Sections are found by heading (`Rules`, `Progress notes`, any case); a file without a top-level `- [ ]` checklist is sent whole. Each iteration's run-log record lists the note numbers and characters sent (`context`).
+
+**Model per step** — End a checklist line with `(model: fable)` (any alias `claude --model` accepts, or a full model name) to run that step on that model; other steps use `--model`. The tag survives ticking. An unknown name is reported and the step runs on `--model`. Each iteration's model is printed and recorded in the run log; `pralph query --cost-per-model` sums cost per model. `--review-model` sets the model for `--review fresh` (default: `--model`).
 
 ```bash
 pralph justloop --plan-file .pralph/loop-plan.md
@@ -292,6 +296,7 @@ All structured data is stored in DuckDB, queryable via `pralph query`. Use built
 pralph query --progress        # story counts by status
 pralph query --cost            # cost breakdown by phase
 pralph query --cost-per-story  # cost per story
+pralph query --cost-per-model  # cost per model (justloop)
 pralph query --stories         # list all stories with status
 pralph query --errors          # recent errors
 pralph query --timeline        # implementation timeline
@@ -416,6 +421,7 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 | `--review-cmd` | — | Command that reviews each done step before it is ticked (exit 0 = clean, 1 = findings on stdout, other = error) |
 | `--review` | — | `fresh`: built-in review in a new read-only `claude` session |
 | `--review-every` | 1 | Review every Nth done step (the plan's last step always) |
+| `--review-model` | `--model` | Model for `--review fresh` |
 | `--stop-on-denial` | off | Stop at the first refused tool call |
 | `--reset` | off | Reset phase state and start fresh |
 
@@ -459,6 +465,7 @@ pralph reset-errors
 - `--cost` — Cost breakdown by phase
 - `--stories` — List all stories with status
 - `--cost-per-story` — Cost per story
+- `--cost-per-model` — Cost per model (justloop iterations)
 - `--errors` — Recent errors
 - `--timeline` — Implementation timeline
 - `--projects` — All registered projects (no project context needed)

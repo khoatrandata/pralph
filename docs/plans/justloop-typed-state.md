@@ -1,6 +1,6 @@
 # Plan: justloop with typed state, a fresh reviewer and focused context
 
-Status: changes 1 and 2 merged (PR #1, 2026-10-16); changes 3 and 4 implemented on branch `feat/justloop-review-denials` (2026-10-16); changes 5 and 6 not started. Written 2026-10-15 for hand-over to another session. The design sections describe the plan as written; where the implementation differs, the change notes under each heading say how.
+Status: changes 1 and 2 merged and released as 0.2.0 (PR #1); changes 3 and 4 merged (PR #2, 2026-10-16), not yet released; changes 5 and 6 implemented on branch `feat/justloop-focused-context` (2026-10-16). Written 2026-10-15 for hand-over to another session. The design sections describe the plan as written; where the implementation differs, the change notes under each heading say how.
 
 ## Why
 
@@ -18,8 +18,8 @@ The design idea behind all six changes: keep the state the loop depends on in pr
 2. Step attempts and a stop rule enforced in code. **Done.**
 3. A fresh-process reviewer after each step. **Done.**
 4. Permission denials recorded as typed hand-off items. **Done.**
-5. Focused context: send the current step, not the whole plan.
-6. Model chosen per step.
+5. Focused context: send the current step, not the whole plan. **Done.**
+6. Model chosen per step. **Done.**
 
 Changes 2–6 all read the typed result from change 1, so build change 1 first. Changes 3–6 are independent of each other after that.
 
@@ -138,6 +138,14 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 
 ## Change 5 — Focused context: send the current step
 
+**Implemented** on `feat/justloop-focused-context`. Differences from the design below:
+- The layout counts as recognised when the file has a top-level checklist; Rules and Progress notes are optional.
+- Each top-level bullet under Progress notes is a note, numbered from 1. Indented lines join the bullet above them.
+- Identifiers that count for relevance are backticked spans, paths, ticket keys and snake_case, dotted or CamelCase names, so ordinary words don't match.
+- When the cap is reached, the last two notes are cut short; earlier notes are dropped.
+- The default task for `--plan-file` with no prompt is now "Do the current step of the plan in PATH."
+- The run log's `context` field records `focused`, the note numbers sent and the character count.
+
 **Problem.** Every iteration reads the whole plan file: all rules, every step and every note. Most of it is irrelevant to the step at hand, and it grows with each note. In the measured sessions, re-reading context accounts for most tokens (98.7% of API tokens were cache reads over 14 days of sessions in platform-data-lake).
 
 **Design.**
@@ -163,6 +171,8 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 **Open question.** Use a small model to choose notes instead of token matching? Start with matching, log the inclusions, and decide from evidence.
 
 ## Change 6 — Model per step
+
+**Implemented** on `feat/justloop-focused-context`. The tag must end the line; a `(model: X)` in the middle of the text is not a tag. Valid names are the CLI aliases (fable, opus, sonnet, haiku, opusplan, default) or a full `claude-...` model name. `pralph query --cost-per-model` sums justloop cost per model.
 
 **Problem.** `--model` applies to the whole run. Users route by task type: in platform-data-lake, review and planning steps go to Fable and build and debug steps to Opus. A run that mixes them pays the wrong price or gets the wrong strength on some steps.
 

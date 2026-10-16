@@ -100,13 +100,15 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             review TEXT DEFAULT '',
             review_findings TEXT DEFAULT '',
             needs_human TEXT DEFAULT '',
+            model TEXT DEFAULT '',
+            context TEXT DEFAULT '',
             logged_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
 
     # Migration: add columns missing from existing DBs
     for col in ("session_id", "status", "step", "commit", "blocker",
-                "review", "review_findings", "needs_human"):
+                "review", "review_findings", "needs_human", "model", "context"):
         try:
             conn.execute(f'SELECT "{col}" FROM run_log LIMIT 0')
         except Exception:

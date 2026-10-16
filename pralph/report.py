@@ -36,6 +36,15 @@ BUILTIN_QUERIES = {
            FROM run_log WHERE project_id = ? AND story_id != ''
            GROUP BY story_id ORDER BY total_cost DESC""",
     ),
+    "cost-per-model": (
+        "Cost per model (justloop)",
+        """SELECT model, COUNT(*) as iterations,
+                  ROUND(SUM(cost_usd), 4) as total_cost,
+                  SUM(input_tokens) as input_tokens,
+                  SUM(output_tokens) as output_tokens
+           FROM run_log WHERE project_id = ? AND model != ''
+           GROUP BY model ORDER BY total_cost DESC""",
+    ),
     "errors": (
         "Recent errors",
         """SELECT iteration, phase, story_id, session_id, error, ROUND(duration, 1) as duration_s
@@ -130,6 +139,22 @@ def run_builtin_query(name: str, state) -> tuple[list[str], list[tuple]]:
         columns = ["id", "title", "status", "priority", "category", "complexity"]
         rows = [(s.id, s.title, s.status.value, s.priority, s.category, s.complexity)
                 for s in sorted(stories, key=lambda s: (s.priority, s.id))]
+        return columns, rows
+
+    if name == "cost-per-model":
+        agg = defaultdict(lambda: {"iterations": 0, "total_cost": 0.0, "input_tokens": 0, "output_tokens": 0})
+        for e in state.load_run_log():
+            model = e.get("model") or ""
+            if not model:
+                continue
+            a = agg[model]
+            a["iterations"] += 1
+            a["total_cost"] += e.get("cost_usd", 0.0) or 0.0
+            a["input_tokens"] += e.get("input_tokens", 0) or 0
+            a["output_tokens"] += e.get("output_tokens", 0) or 0
+        columns = ["model", "iterations", "total_cost", "input_tokens", "output_tokens"]
+        rows = [(m, a["iterations"], round(a["total_cost"], 4), a["input_tokens"], a["output_tokens"])
+                for m, a in sorted(agg.items(), key=lambda x: x[1]["total_cost"], reverse=True)]
         return columns, rows
 
     if name == "cost-per-story":
