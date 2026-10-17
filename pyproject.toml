@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pralph"
-version = "0.3.0"
+version = "0.3.1"
 description = "Plan-driven autonomous loop runner for Claude Code"
 authors = ["InDebted Efficiency <efficiency@indebted.co>"]
 readme = "README.md"
