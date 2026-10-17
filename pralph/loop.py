@@ -41,6 +41,7 @@ from pralph.parser import (
 )
 from pralph.review import run_review
 from pralph.runner import (
+    builtin_tools,
     ADD_TOOLS,
     IDEATE_TOOLS,
     IMPLEMENT_TOOLS,
@@ -1694,6 +1695,41 @@ def _step_model(step: planfile.PlanStep | None, default: str) -> str:
     return tag
 
 
+POST_RUN_TIMEOUT = 600
+
+
+def _run_post_run_cmd(cmd: str, project_dir: str, ps: PhaseState) -> None:
+    """Run the user's end-of-run command, e.g. an import of ``query --loop-state``.
+
+    It gets PRALPH_RUN_ID, PRALPH_COMPLETION_REASON and PRALPH_PROJECT_DIR.
+    A failure is reported and does not change the run's outcome.
+    """
+    import os
+    import subprocess
+
+    env = dict(os.environ)
+    env.update({
+        "PRALPH_RUN_ID": ps.run_id,
+        "PRALPH_COMPLETION_REASON": ps.completion_reason,
+        "PRALPH_PROJECT_DIR": project_dir,
+    })
+    click.echo(click.style(f"  post-run: {cmd}", dim=True))
+    try:
+        proc = subprocess.run(cmd, shell=True, cwd=project_dir, env=env,
+                              capture_output=True, text=True, timeout=POST_RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        click.echo(click.style(f"  ⚠ post-run command timed out after {POST_RUN_TIMEOUT}s", fg="yellow"))
+        return
+    except OSError as e:
+        click.echo(click.style(f"  ⚠ post-run command failed to start: {e}", fg="yellow"))
+        return
+    output = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        click.echo(click.style(f"  ⚠ post-run command exited {proc.returncode}: {output[-500:]}", fg="yellow"))
+    elif output:
+        click.echo(click.style(f"  {output[-500:]}", dim=True))
+
+
 def _plan_has_unchecked(plan_path: str) -> bool:
     try:
         return planfile.next_step(planfile.read_plan(plan_path)) is not None
@@ -1720,6 +1756,9 @@ def run_justloop(
     review_every: int = 1,
     stop_on_denial: bool = False,
     review_model: str = "",
+    post_run_cmd: str = "",
+    mcp_configs: list[str] | None = None,
+    lean_tools: bool = False,
 ) -> PhaseState:
     """Run a simple prompt loop until completion.
 
@@ -1738,6 +1777,13 @@ def run_justloop(
     With a plan file, each prompt carries the plan's rules, the current step
     and the notes relevant to it (the whole file when its layout is not
     recognised), and a step tagged ``(model: X)`` runs on model X.
+
+    Each run gets a ``run_id``, recorded on the phase state and on every log
+    row. ``post_run_cmd`` runs once when the run ends (see _run_post_run_cmd).
+    ``mcp_configs`` limits iterations and the fresh reviewer to those MCP
+    servers; an empty list starts none (``--no-mcp``). None keeps Claude's own.
+    ``lean_tools`` loads only the built-in tools the loop may use (``--tools``),
+    instead of every built-in tool's definition.
     """
     import uuid
     from pathlib import Path
@@ -1769,14 +1815,20 @@ def run_justloop(
         reviewer = StepReviewer(
             project_dir, cmd=review_cmd, fresh=not review_cmd, every=review_every,
             model=review_model or model, verbose=verbose, max_budget_usd=max_budget_usd,
+            mcp_configs=mcp_configs, lean_tools=lean_tools,
         )
+    lean = builtin_tools(tools) if lean_tools else None
 
+    # Each run gets an id; its log rows carry it so exports can tell runs apart
+    run_id = str(uuid.uuid4())
+    ps0 = state.load_phase_state("justloop")
+    ps0.run_id, ps0.started_at = run_id, datetime.now().isoformat()
     carried = steps.carried_blocker(previous_state)
     if carried:
         step, blocker = carried
-        ps0 = state.load_phase_state("justloop")
         steps.seed_carried_blocker(ps0, step, blocker, previous_state.steps.get(step))
-        state.save_phase_state(ps0)
+    state.save_phase_state(ps0)
+    if carried:
         click.echo(click.style(f"  previous run stopped on {step!r} with: {blocker[:200]}", fg="yellow"))
         click.echo(click.style("  retrying it once", fg="yellow"))
 
@@ -1817,11 +1869,14 @@ def run_justloop(
             project_dir=str(state.project_dir),
             session_id=sid,
             json_schema=schema,
+            mcp_configs=mcp_configs,
+            tools=lean,
         )
 
         _clear_session_tracking(ps)
         ir = _justloop_iteration_result(i, "execute", result, plan_path, reviewer, project_dir)
         ir.model = iter_model
+        ir.run_id = run_id
         if pc is not None:
             ir.context = pc.summary()
         return ir
@@ -1835,8 +1890,12 @@ def run_justloop(
             dangerously_skip_permissions=dangerously_skip_permissions,
             verbose=verbose,
             json_schema=schema,
+            mcp_configs=mcp_configs,
+            tools=lean,
         )
-        return _justloop_iteration_result(ps.current_iteration, "resume", result, plan_path, reviewer, project_dir)
+        ir = _justloop_iteration_result(ps.current_iteration, "resume", result, plan_path, reviewer, project_dir)
+        ir.run_id = run_id
+        return ir
 
     def completion_fn(result: IterationResult, ps: PhaseState) -> bool:
         ps.needs_human = denials.merge_items(ps.needs_human, result.needs_human)
@@ -1876,4 +1935,6 @@ def run_justloop(
 
     ps = _run_loop("justloop", state, max_iterations, cooldown, iteration_fn, completion_fn, resume_fn, verbose, dangerously_skip_permissions)
     _finish_needs_human(state, ps)
+    if post_run_cmd:
+        _run_post_run_cmd(post_run_cmd, project_dir, ps)
     return ps

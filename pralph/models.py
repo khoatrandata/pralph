@@ -97,6 +97,7 @@ class IterationResult:
     # justloop: the model this iteration ran on, and what plan context it got
     model: str = ""
     context: dict = field(default_factory=dict)
+    run_id: str = ""  # justloop run this iteration belongs to
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -119,7 +120,7 @@ class IterationResult:
         if self.session_id:
             d["session_id"] = self.session_id
         for key in ("status", "step", "commit", "blocker", "step_number",
-                    "review", "review_findings", "needs_human", "model", "context"):
+                    "review", "review_findings", "needs_human", "model", "context", "run_id"):
             if getattr(self, key):
                 d[key] = getattr(self, key)
         return d
@@ -199,6 +200,9 @@ class PhaseState:
     last_step: str = ""
     # justloop: hand-off items for a person, collected over the run
     needs_human: list[dict] = field(default_factory=list)
+    # justloop: this run's id and start time (a run resets the phase state)
+    run_id: str = ""
+    started_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -224,6 +228,10 @@ class PhaseState:
             d["last_step"] = self.last_step
         if self.needs_human:
             d["needs_human"] = self.needs_human
+        if self.run_id:
+            d["run_id"] = self.run_id
+        if self.started_at:
+            d["started_at"] = self.started_at
         return d
 
     @classmethod
@@ -244,4 +252,6 @@ class PhaseState:
             steps=steps_from_dict(d.get("steps")),
             last_step=d.get("last_step", ""),
             needs_human=list(d.get("needs_human") or []),
+            run_id=d.get("run_id", ""),
+            started_at=d.get("started_at", ""),
         )

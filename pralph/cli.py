@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -635,12 +636,25 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
               help="Review every Nth done step (the plan's last step is always reviewed)")
 @click.option("--review-model", default=None,
               help="Model for --review fresh (default: the run's --model)")
+@click.option("--no-mcp", is_flag=True, default=False,
+              help="Start iterations with no MCP servers (smaller fixed context per iteration)")
+@click.option("--mcp-config", "mcp_config", multiple=True, type=click.Path(exists=True, dir_okay=False),
+              help="Start iterations with only the MCP servers in this config file (repeatable)")
+@click.option("--lean-tools", is_flag=True, default=False,
+              help="Load only the built-in tools the loop may use, not every tool's definition "
+                   "(smaller fixed context; drops Agent, Skill, TodoWrite and web tools)")
+@click.option("--post-run-cmd", default=None,
+              help="Command to run once when the run ends (gets PRALPH_RUN_ID, "
+                   "PRALPH_COMPLETION_REASON, PRALPH_PROJECT_DIR)")
 @click.option("--stop-on-denial", is_flag=True, default=False,
               help="Stop at the first refused tool call instead of letting the loop work around it")
 @click.pass_context
 def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
-             review_cmd, review_mode, review_every, review_model, stop_on_denial):
+             review_cmd, review_mode, review_every, review_model, no_mcp, mcp_config,
+             lean_tools, post_run_cmd, stop_on_denial):
     """Run a prompt in a loop until complete."""
+    if no_mcp and mcp_config:
+        raise click.UsageError("use --no-mcp or --mcp-config, not both")
     if review_cmd and review_mode:
         raise click.UsageError("use --review-cmd or --review, not both")
     project_dir = ctx.obj["project_dir"]
@@ -699,6 +713,9 @@ def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
         review_every=review_every,
         stop_on_denial=stop_on_denial,
         review_model=review_model or "",
+        post_run_cmd=post_run_cmd or "",
+        mcp_configs=[] if no_mcp else ([os.path.abspath(c) for c in mcp_config] or None),
+        lean_tools=lean_tools,
     )
 
 
@@ -927,11 +944,13 @@ def viewer(ctx, port, no_open):
 @click.option("--timeline", is_flag=True, help="Implementation timeline")
 @click.option("--projects", is_flag=True, help="All registered projects")
 @click.option("--report", is_flag=True, help="Full progress report (phases, stories, costs, active work)")
+@click.option("--loop-state", is_flag=True,
+              help="The last justloop run's state as JSON (version 1), for other tools")
 @click.option("--watch", type=int, default=0, metavar="SECONDS", help="Auto-refresh every N seconds (use with --report)")
 @click.option("--all-projects", is_flag=True, help="Include all projects in custom SQL")
 @click.option("--format", "fmt", type=click.Choice(["table", "csv", "json"]), default="table", help="Output format")
 @click.pass_context
-def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, cost_per_model, errors, timeline, projects, report, watch, all_projects, fmt):
+def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, cost_per_model, errors, timeline, projects, report, loop_state, watch, all_projects, fmt):
     """Query project data.
 
     Run built-in queries with flags (--progress, --cost, --stories, etc.)
@@ -945,8 +964,21 @@ def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, cost_per_m
       pralph query --cost --format json
       pralph query "SELECT * FROM stories WHERE priority = 1"
       pralph query --projects
+      pralph query --loop-state --format json
     """
     import time
+
+    if loop_state:
+        if fmt != "json":
+            raise click.UsageError("--loop-state prints JSON only: add --format json")
+        from pralph.loop_state import build_loop_state, empty_loop_state
+        try:
+            state = StateManager(ctx.obj["project_dir"], readonly=True, domains=ctx.obj.get("domains"))
+        except ProjectNotInitializedError:
+            click.echo(json.dumps(empty_loop_state(), indent=2))
+            return
+        click.echo(json.dumps(build_loop_state(state), indent=2, default=str))
+        return
 
     def _output(columns: list[str], rows: list[tuple]) -> None:
         if fmt == "table":
