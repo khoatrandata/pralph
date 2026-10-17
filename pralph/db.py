@@ -102,13 +102,14 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             needs_human TEXT DEFAULT '',
             model TEXT DEFAULT '',
             context TEXT DEFAULT '',
+            run_id TEXT DEFAULT '',
             logged_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
 
     # Migration: add columns missing from existing DBs
     for col in ("session_id", "status", "step", "commit", "blocker",
-                "review", "review_findings", "needs_human", "model", "context"):
+                "review", "review_findings", "needs_human", "model", "context", "run_id"):
         try:
             conn.execute(f'SELECT "{col}" FROM run_log LIMIT 0')
         except Exception:
@@ -137,12 +138,15 @@ def _ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
             steps TEXT DEFAULT '{}',
             last_step TEXT DEFAULT '',
             needs_human TEXT DEFAULT '[]',
+            run_id TEXT DEFAULT '',
+            started_at TEXT DEFAULT '',
             PRIMARY KEY (project_id, phase)
         )
     """)
 
     # Migration: justloop step records (existing DBs)
-    for col, default in (("steps", "'{}'"), ("last_step", "''"), ("needs_human", "'[]'")):
+    for col, default in (("steps", "'{}'"), ("last_step", "''"), ("needs_human", "'[]'"),
+                         ("run_id", "''"), ("started_at", "''")):
         try:
             conn.execute(f"SELECT {col} FROM phase_state LIMIT 0")
         except Exception:

@@ -297,6 +297,7 @@ pralph query --progress        # story counts by status
 pralph query --cost            # cost breakdown by phase
 pralph query --cost-per-story  # cost per story
 pralph query --cost-per-model  # cost per model (justloop)
+pralph query --loop-state --format json  # last justloop run, for other tools
 pralph query --stories         # list all stories with status
 pralph query --errors          # recent errors
 pralph query --timeline        # implementation timeline
@@ -422,6 +423,7 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 | `--review` | — | `fresh`: built-in review in a new read-only `claude` session |
 | `--review-every` | 1 | Review every Nth done step (the plan's last step always) |
 | `--review-model` | `--model` | Model for `--review fresh` |
+| `--post-run-cmd` | — | Command run once when the run ends, with `PRALPH_RUN_ID`, `PRALPH_COMPLETION_REASON` and `PRALPH_PROJECT_DIR`; a failure is reported and does not change the run's outcome |
 | `--stop-on-denial` | off | Stop at the first refused tool call |
 | `--reset` | off | Reset phase state and start fresh |
 
@@ -466,6 +468,12 @@ pralph reset-errors
 - `--stories` — List all stories with status
 - `--cost-per-story` — Cost per story
 - `--cost-per-model` — Cost per model (justloop iterations)
+- `--loop-state` — The last justloop run as one JSON object (needs `--format json`), for tools that import loop state. It works with both storage backends. Fields:
+  - `version`: currently 1; a consumer should refuse a version it does not know.
+  - `project_id`: null when the directory has no pralph project.
+  - `phase_state`: null when the project has no justloop run. Otherwise it holds `run_id`, `started_at`, `completed`, `completion_reason`, `last_error`, `last_step`, `current_iteration`, `total_cost_usd` and `needs_human` (the Needs a person items).
+  - `steps`: one entry per step record, with `key`, `step_number`, `text`, `attempts`, `last_status`, `last_blocker`, `review_findings` and `commit`, the step's latest commit in this run.
+  - Each run gets a new `run_id`, and justloop resets its state at the start of a run, so import after every run, for example with `--post-run-cmd`.
 - `--errors` — Recent errors
 - `--timeline` — Implementation timeline
 - `--projects` — All registered projects (no project context needed)

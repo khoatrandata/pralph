@@ -405,6 +405,8 @@ class DbStateMixin:
             steps=steps_from_dict(json.loads(d.get("steps") or "{}")),
             last_step=d.get("last_step") or "",
             needs_human=json.loads(d.get("needs_human") or "[]"),
+            run_id=d.get("run_id") or "",
+            started_at=d.get("started_at") or "",
         )
 
     def save_phase_state(self, state: PhaseState) -> None:
@@ -414,8 +416,8 @@ class DbStateMixin:
                    (project_id, phase, current_iteration, consecutive_empty,
                     consecutive_errors, completed, completion_reason, total_cost_usd,
                     last_error, last_summary, active_session_id, active_story_id,
-                    active_session_started, steps, last_step, needs_human)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    active_session_started, steps, last_step, needs_human, run_id, started_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     state.phase,
@@ -433,6 +435,8 @@ class DbStateMixin:
                     json.dumps({k: v.to_dict() for k, v in state.steps.items()}),
                     state.last_step,
                     json.dumps(state.needs_human),
+                    state.run_id,
+                    state.started_at,
                 ],
             )
 
@@ -457,8 +461,8 @@ class DbStateMixin:
                     input_tokens, output_tokens, cache_read_input_tokens,
                     cache_creation_input_tokens, session_id,
                     status, step, "commit", blocker, step_number,
-                    review, review_findings, needs_human, model, context)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    review, review_findings, needs_human, model, context, run_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     self.project_id,  # type: ignore[attr-defined]
                     result.iteration,
@@ -486,6 +490,7 @@ class DbStateMixin:
                     json.dumps(result.needs_human) if result.needs_human else "",
                     result.model,
                     json.dumps(result.context) if result.context else "",
+                    result.run_id,
                 ],
             )
 
@@ -500,7 +505,7 @@ class DbStateMixin:
                               input_tokens, output_tokens, cache_read_input_tokens,
                               cache_creation_input_tokens, session_id,
                               status, step, "commit", blocker, step_number,
-                              review, review_findings, needs_human, model, context, logged_at
+                              review, review_findings, needs_human, model, context, run_id, logged_at
                        FROM run_log WHERE project_id = ?
                        ORDER BY logged_at""",
                     [self.project_id],  # type: ignore[attr-defined]
