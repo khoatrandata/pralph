@@ -1,6 +1,6 @@
 # Plan: justloop with typed state, a fresh reviewer and focused context
 
-Status: changes 1 and 2 merged and released as 0.2.0 (PR #1); changes 3 and 4 merged (PR #2, 2026-10-16), not yet released; changes 5 and 6 implemented on branch `feat/justloop-focused-context` (2026-10-16). Written 2026-10-15 for hand-over to another session. The design sections describe the plan as written; where the implementation differs, the change notes under each heading say how.
+Status: all six changes are released. Changes 1 and 2 shipped in 0.2.0 (PR #1); changes 3–6 shipped in 0.3.0 (PRs #2 and #3, 2026-10-16). platform-data-lake's `headless_review.py --step` (PR #6631) is the per-step review command for change 3. Written 2026-10-15 for hand-over to another session. The design sections describe the plan as written; where the implementation differs, the change notes under each heading say how.
 
 ## Why
 
@@ -92,7 +92,7 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 
 ## Change 3 — A fresh-process reviewer after each step
 
-**Implemented** on `feat/justloop-review-denials`. Differences from the design below:
+**Implemented** in 0.3.0 (PR #2). Differences from the design below:
 - The review base is the last cleanly reviewed commit, so a re-review after findings covers the step and its fixes together. The base starts at HEAD when the run starts.
 - A done step with no new commit since the base is not reviewed and is ticked.
 - Only exit 1 means findings. Any other non-zero exit, a signal, or a timeout (30 minutes, which kills the command's process group) is `review_error`, and the error is added to the "Needs a person" list. This matches platform-data-lake's `scripts/headless_review.py`: 0 is a 10/10, 1 is below 10, 2 is a review that did not complete and 3 is a limit that needs a person.
@@ -121,7 +121,7 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 
 ## Change 4 — Permission denials as typed hand-off items
 
-**Implemented** on `feat/justloop-review-denials`. A recorded run (2026-10-16) confirmed the field: the result event's `permission_denials` lists `tool_name`, `tool_use_id` and `tool_input`. The refused tool result reads "Claude requested permissions to write to PATH, but you haven't granted it yet." with `is_error` set. Both sources are matched by `tool_use_id`, and the refusal text becomes the reason, with project paths made relative. Items are kept on the run's phase state and in the run log; `--stop-on-denial` stops with `permission_denied`. Model-reported items are deduplicated by their text.
+**Implemented** in 0.3.0 (PR #2). A recorded run (2026-10-16) confirmed the field: the result event's `permission_denials` lists `tool_name`, `tool_use_id` and `tool_input`. The refused tool result reads "Claude requested permissions to write to PATH, but you haven't granted it yet." with `is_error` set. Both sources are matched by `tool_use_id`, and the refusal text becomes the reason, with project paths made relative. Items are kept on the run's phase state and in the run log; `--stop-on-denial` stops with `permission_denied`. Model-reported items are deduplicated by their text.
 
 **Problem.** When Claude Code refuses a tool call in an unattended run, the agent improvises a workaround or a sentence in the notes. The person running the loop learns about it only by reading everything.
 
@@ -138,7 +138,7 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 
 ## Change 5 — Focused context: send the current step
 
-**Implemented** on `feat/justloop-focused-context`. Differences from the design below:
+**Implemented** in 0.3.0 (PR #3). Differences from the design below:
 - The layout counts as recognised when the file has a top-level checklist; Rules and Progress notes are optional.
 - Each top-level bullet under Progress notes is a note, numbered from 1. Indented lines join the bullet above them.
 - Identifiers that count for relevance are backticked spans, paths, ticket keys and snake_case, dotted or CamelCase names, so ordinary words don't match.
@@ -172,7 +172,7 @@ Changes 2–6 all read the typed result from change 1, so build change 1 first. 
 
 ## Change 6 — Model per step
 
-**Implemented** on `feat/justloop-focused-context`. The tag must end the line; a `(model: X)` in the middle of the text is not a tag. Valid names are the CLI aliases (fable, opus, sonnet, haiku, opusplan, default) or a full `claude-...` model name. `pralph query --cost-per-model` sums justloop cost per model.
+**Implemented** in 0.3.0 (PR #3). The tag must end the line; a `(model: X)` in the middle of the text is not a tag. Valid names are the CLI aliases (fable, opus, sonnet, haiku, opusplan, default) or a full `claude-...` model name. `pralph query --cost-per-model` sums justloop cost per model.
 
 **Problem.** `--model` applies to the whole run. Users route by task type: in platform-data-lake, review and planning steps go to Fable and build and debug steps to Opus. A run that mixes them pays the wrong price or gets the wrong strength on some steps.
 
