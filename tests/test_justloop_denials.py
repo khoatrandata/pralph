@@ -92,6 +92,23 @@ class TestItems:
         b = denials.model_items(["grant SSO access to the prod account", "  "], "", 0)
         assert len(denials.merge_items(a, b)) == 1
 
+    def test_model_item_restating_a_denial_is_dropped(self):
+        denied = denials.denial_items(
+            [{"tool": "Write", "tool_input": {"file_path": "/p/.claude/settings.json"}, "reason": ""}], "", 1, "/p")
+        restated = denials.model_items([
+            "Grant write permission for .claude/settings.json, then rerun step 1",
+            "Step 1 (carried over): grant write access to /p/.claude/settings.json",
+            "Approve the prod deploy",
+        ], "", 2, "/p")
+        merged = denials.merge_items(denials.merge_items([], denied), restated)
+        assert [i["reason"] for i in merged[1:]] == ["Approve the prod deploy"]
+        # within one iteration's list too (denials come first)
+        assert len(denials.merge_items([], denied + restated)) == 2
+
+    def test_model_item_kept_without_a_matching_denial(self):
+        items = denials.model_items(["Grant write permission for .claude/settings.json"], "", 1)
+        assert len(denials.merge_items([], items)) == 1
+
     def test_render(self):
         items = denials.denial_items(
             [{"tool": "Write", "tool_input": {"file_path": "/p/.claude/settings.json"}, "reason": ""}],

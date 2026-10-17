@@ -142,16 +142,29 @@ def _dedupe_key(item: dict) -> tuple[str, str]:
 def merge_items(existing: list[dict], new: list[dict]) -> list[dict]:
     """Append ``new`` items, dropping ones whose (tool, target) is already listed.
 
-    Items without a tool or target (model-reported) are matched by reason.
+    Items without a tool or target (model-reported) are matched by reason,
+    and dropped when they name the target of a refused call already listed,
+    since that refusal is recorded from the stream.
     """
     seen = {_dedupe_key(i) for i in existing}
     merged = list(existing)
     for item in new:
         key = _dedupe_key(item)
-        if key not in seen:
-            seen.add(key)
-            merged.append(item)
+        if key in seen or _restates_denial(item, merged):
+            continue
+        seen.add(key)
+        merged.append(item)
     return merged
+
+
+def _restates_denial(item: dict, items: list[dict]) -> bool:
+    if item.get("source") != "model":
+        return False
+    reason = item.get("reason", "")
+    return any(
+        i.get("source") == "denied" and len(i.get("target", "")) >= 3 and i["target"] in reason
+        for i in items
+    )
 
 
 def _step_label(item: dict) -> str:
