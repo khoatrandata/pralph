@@ -29,7 +29,7 @@ Your final answer is a structured object (the output schema is enforced). Fill e
 - `commit`: the sha of the commit you made this iteration, or empty.
 - `note`: one line for the next iteration (what you did, what to watch out for).
 - `blocker`: when `status` is `blocked`, the exact error text; otherwise empty.
-- `needs_human`: actions only a person can take (an access grant, a gated deploy, an edit you were refused); otherwise an empty list.
+- `needs_human`: actions only a person can take that you found this iteration (an access grant, a gated deploy); otherwise an empty list. Do not repeat items from earlier iterations, and do not list tool calls that were refused: pralph records both.
 
 Only report `nothing_left` when re-running this task would find nothing left to do. If a future iteration could pick up more work, report `done` or `in_progress`.
 """
