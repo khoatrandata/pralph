@@ -1,4 +1,4 @@
-"""justloop --no-mcp / --mcp-config: which MCP servers iterations start with."""
+"""justloop MCP servers (--mcp / --no-mcp / --mcp-config) and built-in tools (--lean-tools / --full-tools)."""
 
 from __future__ import annotations
 
@@ -63,15 +63,17 @@ class TestLoop:
         seen = {}
         monkeypatch.setattr("pralph.cli.run_justloop", lambda state, **kw: seen.update(kw))
         d = str(jsonl_state.project_dir)
-        r = CliRunner().invoke(main, ["--project-dir", d, "justloop", "--no-mcp", "go"])
-        assert r.exit_code == 0 and seen["mcp_configs"] == []
+        r = CliRunner().invoke(main, ["--project-dir", d, "justloop", "go"])
+        assert r.exit_code == 0 and seen["mcp_configs"] == []  # no MCP servers by default
+        CliRunner().invoke(main, ["--project-dir", d, "justloop", "--no-mcp", "go"])
+        assert seen["mcp_configs"] == []
+        CliRunner().invoke(main, ["--project-dir", d, "justloop", "--mcp", "go"])
+        assert seen["mcp_configs"] is None
         cfg = tmp_path / "mcp.json"
         cfg.write_text('{"mcpServers": {}}')
         CliRunner().invoke(main, ["--project-dir", d, "justloop", "--mcp-config", str(cfg), "go"])
         assert seen["mcp_configs"] == [str(cfg)]
-        CliRunner().invoke(main, ["--project-dir", d, "justloop", "go"])
-        assert seen["mcp_configs"] is None
-        r = CliRunner().invoke(main, ["--project-dir", d, "justloop", "--no-mcp", "--mcp-config", str(cfg), "go"])
+        r = CliRunner().invoke(main, ["--project-dir", d, "justloop", "--mcp", "--mcp-config", str(cfg), "go"])
         assert r.exit_code == 2 and "not both" in r.output
 
 
@@ -111,5 +113,8 @@ class TestLeanTools:
     def test_cli(self, jsonl_state, monkeypatch):
         seen = {}
         monkeypatch.setattr("pralph.cli.run_justloop", lambda state, **kw: seen.update(kw))
-        CliRunner().invoke(main, ["--project-dir", str(jsonl_state.project_dir), "justloop", "--lean-tools", "go"])
-        assert seen["lean_tools"] is True
+        d = str(jsonl_state.project_dir)
+        CliRunner().invoke(main, ["--project-dir", d, "justloop", "go"])
+        assert seen["lean_tools"] is True  # lean by default
+        CliRunner().invoke(main, ["--project-dir", d, "justloop", "--full-tools", "go"])
+        assert seen["lean_tools"] is False

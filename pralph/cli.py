@@ -636,13 +636,14 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
               help="Review every Nth done step (the plan's last step is always reviewed)")
 @click.option("--review-model", default=None,
               help="Model for --review fresh (default: the run's --model)")
-@click.option("--no-mcp", is_flag=True, default=False,
-              help="Start iterations with no MCP servers (smaller fixed context per iteration)")
+@click.option("--mcp/--no-mcp", "use_mcp", default=False, show_default=True,
+              help="Start iterations with Claude's configured MCP servers (default: none, "
+                   "for a smaller fixed context per iteration)")
 @click.option("--mcp-config", "mcp_config", multiple=True, type=click.Path(exists=True, dir_okay=False),
               help="Start iterations with only the MCP servers in this config file (repeatable)")
-@click.option("--lean-tools", is_flag=True, default=False,
-              help="Load only the built-in tools the loop may use, not every tool's definition "
-                   "(smaller fixed context; drops Agent, Skill, TodoWrite and web tools)")
+@click.option("--lean-tools/--full-tools", default=True, show_default=True,
+              help="Load only the built-in tools the loop may use (default), or every built-in "
+                   "tool's definition (--full-tools: Agent, Skill, TodoWrite, web tools)")
 @click.option("--post-run-cmd", default=None,
               help="Command to run once when the run ends (gets PRALPH_RUN_ID, "
                    "PRALPH_COMPLETION_REASON, PRALPH_PROJECT_DIR)")
@@ -650,11 +651,11 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
               help="Stop at the first refused tool call instead of letting the loop work around it")
 @click.pass_context
 def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
-             review_cmd, review_mode, review_every, review_model, no_mcp, mcp_config,
+             review_cmd, review_mode, review_every, review_model, use_mcp, mcp_config,
              lean_tools, post_run_cmd, stop_on_denial):
     """Run a prompt in a loop until complete."""
-    if no_mcp and mcp_config:
-        raise click.UsageError("use --no-mcp or --mcp-config, not both")
+    if use_mcp and mcp_config:
+        raise click.UsageError("use --mcp or --mcp-config, not both")
     if review_cmd and review_mode:
         raise click.UsageError("use --review-cmd or --review, not both")
     project_dir = ctx.obj["project_dir"]
@@ -714,7 +715,9 @@ def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
         stop_on_denial=stop_on_denial,
         review_model=review_model or "",
         post_run_cmd=post_run_cmd or "",
-        mcp_configs=[] if no_mcp else ([os.path.abspath(c) for c in mcp_config] or None),
+        mcp_configs=(
+            [os.path.abspath(c) for c in mcp_config] if mcp_config else (None if use_mcp else [])
+        ),
         lean_tools=lean_tools,
     )
 
