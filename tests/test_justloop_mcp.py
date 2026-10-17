@@ -73,3 +73,43 @@ class TestLoop:
         assert seen["mcp_configs"] is None
         r = CliRunner().invoke(main, ["--project-dir", d, "justloop", "--no-mcp", "--mcp-config", str(cfg), "go"])
         assert r.exit_code == 2 and "not both" in r.output
+
+
+# --lean-tools: load only the built-in tools the loop may use
+
+
+class TestLeanTools:
+    def test_builtin_names(self):
+        assert runner.builtin_tools("Read,Write,Edit,Bash,Glob,Grep") == "Read,Write,Edit,Bash,Glob,Grep"
+        assert runner.builtin_tools("Read, Bash(git diff:*),Bash(git log:*),mcp__x__y,LSP") == "Read,Bash,LSP"
+
+    def test_runner_passes_tools(self, monkeypatch):
+        cmd = _cmd(monkeypatch, tools="Read,Bash")
+        assert cmd[cmd.index("--tools") + 1] == "Read,Bash"
+        assert "--tools" not in _cmd(monkeypatch)
+
+    def test_loop(self, jsonl_state, monkeypatch):
+        seen = []
+        monkeypatch.setattr(loop, "run_with_retry", lambda prompt, **kw: seen.append(kw) or _nothing_left())
+        loop.run_justloop(jsonl_state, user_prompt="x", max_iterations=1, cooldown=0,
+                          lean_tools=True, extra_tools="LSP,mcp__athena__query")
+        assert seen[0]["tools"] == "Read,Write,Edit,Bash,Glob,Grep,LSP"
+        assert seen[0]["allowed_tools"].endswith("LSP,mcp__athena__query")
+        seen.clear()
+        jsonl_state.save_phase_state(loop.PhaseState(phase="justloop"))  # a new run, as the CLI resets it
+        loop.run_justloop(jsonl_state, user_prompt="x", max_iterations=1, cooldown=0)
+        assert seen[0]["tools"] is None
+
+    def test_fresh_reviewer(self, monkeypatch, tmp_path):
+        from pralph import justloop_review as jr
+        seen = {}
+        monkeypatch.setattr(runner, "run_with_retry",
+                            lambda prompt, **kw: seen.update(kw) or ClaudeResult(success=False, error="x"))
+        jr.run_fresh_review(str(tmp_path), step="s", commit="c", base="b", model="haiku", lean_tools=True)
+        assert seen["tools"] == "Read,Glob,Grep,Bash"
+
+    def test_cli(self, jsonl_state, monkeypatch):
+        seen = {}
+        monkeypatch.setattr("pralph.cli.run_justloop", lambda state, **kw: seen.update(kw))
+        CliRunner().invoke(main, ["--project-dir", str(jsonl_state.project_dir), "justloop", "--lean-tools", "go"])
+        assert seen["lean_tools"] is True

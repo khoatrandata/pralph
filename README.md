@@ -425,6 +425,7 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 | `--review-model` | `--model` | Model for `--review fresh` |
 | `--no-mcp` | off | Start iterations (and the fresh reviewer) with no MCP servers |
 | `--mcp-config` | — | Start them with only the MCP servers in this config file (repeatable); not with `--no-mcp` |
+| `--lean-tools` | off | Load only the built-in tools the loop may use (its permission list plus `--extra-tools`) instead of every tool's definition. Much smaller fixed context per iteration; Agent, Skill, TodoWrite and web tools are not available unless added with `--extra-tools`. Applies to `--review fresh` too |
 | `--post-run-cmd` | — | Command run once when the run ends, with `PRALPH_RUN_ID`, `PRALPH_COMPLETION_REASON` and `PRALPH_PROJECT_DIR`; a failure is reported and does not change the run's outcome |
 | `--stop-on-denial` | off | Stop at the first refused tool call |
 | `--reset` | off | Reset phase state and start fresh |

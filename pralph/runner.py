@@ -96,8 +96,13 @@ def run_claude(
     session_id: str | None = None,
     json_schema: str | None = None,
     mcp_configs: list[str] | None = None,
+    tools: str | None = None,
 ) -> ClaudeResult:
     """Invoke claude -p as a subprocess with streaming output.
+
+    ``tools`` (comma-separated built-in names) limits which built-in tool
+    definitions the session loads (--tools); ``allowed_tools`` only sets
+    permissions.
 
     ``mcp_configs`` (JSON files or strings) replaces every other MCP server
     source (--strict-mcp-config); an empty-servers config starts none.
@@ -117,6 +122,8 @@ def run_claude(
             cmd.extend(["--json-schema", json_schema])
         if mcp_configs is not None:
             cmd.extend(_mcp_args(mcp_configs))
+        if tools:
+            cmd.extend(["--tools", tools])
     else:
         session_id = session_id or str(uuid.uuid4())
         cmd = [
@@ -142,6 +149,9 @@ def run_claude(
 
         if mcp_configs is not None:
             cmd.extend(_mcp_args(mcp_configs))
+
+        if tools:
+            cmd.extend(["--tools", tools])
 
     cwd = project_dir or None
 
@@ -384,6 +394,20 @@ def run_claude(
 
 
 NO_MCP_CONFIG = '{"mcpServers": {}}'
+
+
+def builtin_tools(allowed: str) -> str:
+    """Built-in tool names from a permission list, for --tools.
+
+    Drops rule patterns ("Bash(git diff:*)" -> "Bash") and MCP tools, which
+    --tools does not govern; keeps the first-seen order.
+    """
+    names: list[str] = []
+    for entry in allowed.split(","):
+        name = entry.strip().split("(", 1)[0].strip()
+        if name and not name.startswith("mcp__") and name not in names:
+            names.append(name)
+    return ",".join(names)
 
 
 def _mcp_args(configs: list[str]) -> list[str]:

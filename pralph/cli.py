@@ -640,6 +640,9 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
               help="Start iterations with no MCP servers (smaller fixed context per iteration)")
 @click.option("--mcp-config", "mcp_config", multiple=True, type=click.Path(exists=True, dir_okay=False),
               help="Start iterations with only the MCP servers in this config file (repeatable)")
+@click.option("--lean-tools", is_flag=True, default=False,
+              help="Load only the built-in tools the loop may use, not every tool's definition "
+                   "(smaller fixed context; drops Agent, Skill, TodoWrite and web tools)")
 @click.option("--post-run-cmd", default=None,
               help="Command to run once when the run ends (gets PRALPH_RUN_ID, "
                    "PRALPH_COMPLETION_REASON, PRALPH_PROJECT_DIR)")
@@ -648,7 +651,7 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
 @click.pass_context
 def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
              review_cmd, review_mode, review_every, review_model, no_mcp, mcp_config,
-             post_run_cmd, stop_on_denial):
+             lean_tools, post_run_cmd, stop_on_denial):
     """Run a prompt in a loop until complete."""
     if no_mcp and mcp_config:
         raise click.UsageError("use --no-mcp or --mcp-config, not both")
@@ -712,6 +715,7 @@ def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
         review_model=review_model or "",
         post_run_cmd=post_run_cmd or "",
         mcp_configs=[] if no_mcp else ([os.path.abspath(c) for c in mcp_config] or None),
+        lean_tools=lean_tools,
     )
 
 

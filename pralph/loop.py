@@ -41,6 +41,7 @@ from pralph.parser import (
 )
 from pralph.review import run_review
 from pralph.runner import (
+    builtin_tools,
     ADD_TOOLS,
     IDEATE_TOOLS,
     IMPLEMENT_TOOLS,
@@ -1757,6 +1758,7 @@ def run_justloop(
     review_model: str = "",
     post_run_cmd: str = "",
     mcp_configs: list[str] | None = None,
+    lean_tools: bool = False,
 ) -> PhaseState:
     """Run a simple prompt loop until completion.
 
@@ -1780,6 +1782,8 @@ def run_justloop(
     row. ``post_run_cmd`` runs once when the run ends (see _run_post_run_cmd).
     ``mcp_configs`` limits iterations and the fresh reviewer to those MCP
     servers; an empty list starts none (``--no-mcp``). None keeps Claude's own.
+    ``lean_tools`` loads only the built-in tools the loop may use (``--tools``),
+    instead of every built-in tool's definition.
     """
     import uuid
     from pathlib import Path
@@ -1811,8 +1815,9 @@ def run_justloop(
         reviewer = StepReviewer(
             project_dir, cmd=review_cmd, fresh=not review_cmd, every=review_every,
             model=review_model or model, verbose=verbose, max_budget_usd=max_budget_usd,
-            mcp_configs=mcp_configs,
+            mcp_configs=mcp_configs, lean_tools=lean_tools,
         )
+    lean = builtin_tools(tools) if lean_tools else None
 
     # Each run gets an id; its log rows carry it so exports can tell runs apart
     run_id = str(uuid.uuid4())
@@ -1865,6 +1870,7 @@ def run_justloop(
             session_id=sid,
             json_schema=schema,
             mcp_configs=mcp_configs,
+            tools=lean,
         )
 
         _clear_session_tracking(ps)
@@ -1885,6 +1891,7 @@ def run_justloop(
             verbose=verbose,
             json_schema=schema,
             mcp_configs=mcp_configs,
+            tools=lean,
         )
         ir = _justloop_iteration_result(ps.current_iteration, "resume", result, plan_path, reviewer, project_dir)
         ir.run_id = run_id
