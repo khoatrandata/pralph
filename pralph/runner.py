@@ -95,8 +95,12 @@ def run_claude(
     resume_session_id: str | None = None,
     session_id: str | None = None,
     json_schema: str | None = None,
+    mcp_configs: list[str] | None = None,
 ) -> ClaudeResult:
     """Invoke claude -p as a subprocess with streaming output.
+
+    ``mcp_configs`` (JSON files or strings) replaces every other MCP server
+    source (--strict-mcp-config); an empty-servers config starts none.
 
     Monitors stdin for ESC key — on press, stops the subprocess (SIGSTOP) and
     presents an interrupt menu (continue / take over / skip / abort).
@@ -111,6 +115,8 @@ def run_claude(
             cmd.append("--dangerously-skip-permissions")
         if json_schema:
             cmd.extend(["--json-schema", json_schema])
+        if mcp_configs is not None:
+            cmd.extend(_mcp_args(mcp_configs))
     else:
         session_id = session_id or str(uuid.uuid4())
         cmd = [
@@ -133,6 +139,9 @@ def run_claude(
 
         if json_schema:
             cmd.extend(["--json-schema", json_schema])
+
+        if mcp_configs is not None:
+            cmd.extend(_mcp_args(mcp_configs))
 
     cwd = project_dir or None
 
@@ -372,6 +381,14 @@ def run_claude(
     if not result.result and all_assistant_text:
         result.result = "\n\n".join(all_assistant_text)
     return result
+
+
+NO_MCP_CONFIG = '{"mcpServers": {}}'
+
+
+def _mcp_args(configs: list[str]) -> list[str]:
+    """Only the given MCP configs; none given means no MCP servers at all."""
+    return ["--strict-mcp-config", "--mcp-config", *(configs or [NO_MCP_CONFIG])]
 
 
 # ── Stream parsing helpers ────────────────────────────────────────────

@@ -423,6 +423,8 @@ Accepts the task as positional arguments (e.g. `pralph justloop fix all linting 
 | `--review` | — | `fresh`: built-in review in a new read-only `claude` session |
 | `--review-every` | 1 | Review every Nth done step (the plan's last step always) |
 | `--review-model` | `--model` | Model for `--review fresh` |
+| `--no-mcp` | off | Start iterations (and the fresh reviewer) with no MCP servers |
+| `--mcp-config` | — | Start them with only the MCP servers in this config file (repeatable); not with `--no-mcp` |
 | `--post-run-cmd` | — | Command run once when the run ends, with `PRALPH_RUN_ID`, `PRALPH_COMPLETION_REASON` and `PRALPH_PROJECT_DIR`; a failure is reported and does not change the run's outcome |
 | `--stop-on-denial` | off | Stop at the first refused tool call |
 | `--reset` | off | Reset phase state and start fresh |

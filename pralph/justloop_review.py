@@ -114,7 +114,7 @@ def run_review_cmd(
 def run_fresh_review(
     project_dir: str, *, step: str, commit: str, base: str, model: str,
     timeout: int = REVIEW_TIMEOUT, verbose: bool = False,
-    max_budget_usd: float | None = None,
+    max_budget_usd: float | None = None, mcp_configs: list[str] | None = None,
 ) -> ReviewOutcome:
     """Review the step's diff with ``claude -p`` in a new read-only session."""
     from pralph.runner import run_with_retry
@@ -137,6 +137,7 @@ def run_fresh_review(
         project_dir=project_dir,
         max_budget_usd=max_budget_usd,
         json_schema=json.dumps(FRESH_REVIEW_SCHEMA),
+        mcp_configs=mcp_configs,
     )
     if not result.success:
         return ReviewOutcome("error", f"fresh review failed: {result.error}", result.cost_usd)
@@ -161,6 +162,7 @@ class StepReviewer:
     def __init__(
         self, project_dir: str, *, cmd: str = "", fresh: bool = False, every: int = 1,
         model: str = "sonnet", verbose: bool = False, max_budget_usd: float | None = None,
+        mcp_configs: list[str] | None = None,
     ) -> None:
         self.project_dir = project_dir
         self.cmd = cmd
@@ -169,6 +171,7 @@ class StepReviewer:
         self.model = model
         self.verbose = verbose
         self.max_budget_usd = max_budget_usd
+        self.mcp_configs = mcp_configs
         self.base = resolve_commit(project_dir, "HEAD")
         self.pending = 0  # done steps since the last clean review
 
@@ -196,6 +199,7 @@ class StepReviewer:
             outcome = run_fresh_review(
                 self.project_dir, step=step, commit=resolved, base=self.base, model=self.model,
                 verbose=self.verbose, max_budget_usd=self.max_budget_usd,
+                mcp_configs=self.mcp_configs,
             )
         if outcome.verdict == "clean":
             self.base, self.pending = resolved, 0

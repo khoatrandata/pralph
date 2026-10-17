@@ -1756,6 +1756,7 @@ def run_justloop(
     stop_on_denial: bool = False,
     review_model: str = "",
     post_run_cmd: str = "",
+    mcp_configs: list[str] | None = None,
 ) -> PhaseState:
     """Run a simple prompt loop until completion.
 
@@ -1777,6 +1778,8 @@ def run_justloop(
 
     Each run gets a ``run_id``, recorded on the phase state and on every log
     row. ``post_run_cmd`` runs once when the run ends (see _run_post_run_cmd).
+    ``mcp_configs`` limits iterations and the fresh reviewer to those MCP
+    servers; an empty list starts none (``--no-mcp``). None keeps Claude's own.
     """
     import uuid
     from pathlib import Path
@@ -1808,6 +1811,7 @@ def run_justloop(
         reviewer = StepReviewer(
             project_dir, cmd=review_cmd, fresh=not review_cmd, every=review_every,
             model=review_model or model, verbose=verbose, max_budget_usd=max_budget_usd,
+            mcp_configs=mcp_configs,
         )
 
     # Each run gets an id; its log rows carry it so exports can tell runs apart
@@ -1860,6 +1864,7 @@ def run_justloop(
             project_dir=str(state.project_dir),
             session_id=sid,
             json_schema=schema,
+            mcp_configs=mcp_configs,
         )
 
         _clear_session_tracking(ps)
@@ -1879,6 +1884,7 @@ def run_justloop(
             dangerously_skip_permissions=dangerously_skip_permissions,
             verbose=verbose,
             json_schema=schema,
+            mcp_configs=mcp_configs,
         )
         ir = _justloop_iteration_result(ps.current_iteration, "resume", result, plan_path, reviewer, project_dir)
         ir.run_id = run_id
