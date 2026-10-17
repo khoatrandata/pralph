@@ -94,6 +94,9 @@ class IterationResult:
     review_findings: str = ""
     # justloop hand-off items from this iteration (see pralph.denials)
     needs_human: list[dict] = field(default_factory=list)
+    # justloop: the model this iteration ran on, and what plan context it got
+    model: str = ""
+    context: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -116,7 +119,7 @@ class IterationResult:
         if self.session_id:
             d["session_id"] = self.session_id
         for key in ("status", "step", "commit", "blocker", "step_number",
-                    "review", "review_findings", "needs_human"):
+                    "review", "review_findings", "needs_human", "model", "context"):
             if getattr(self, key):
                 d[key] = getattr(self, key)
         return d

@@ -633,11 +633,13 @@ def implement(ctx, story_id, with_deps, phase1, review, compound, prompt, prompt
               help="Built-in review of each done step in a fresh read-only claude session")
 @click.option("--review-every", default=1, show_default=True, type=click.IntRange(min=1),
               help="Review every Nth done step (the plan's last step is always reviewed)")
+@click.option("--review-model", default=None,
+              help="Model for --review fresh (default: the run's --model)")
 @click.option("--stop-on-denial", is_flag=True, default=False,
               help="Stop at the first refused tool call instead of letting the loop work around it")
 @click.pass_context
 def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
-             review_cmd, review_mode, review_every, stop_on_denial):
+             review_cmd, review_mode, review_every, review_model, stop_on_denial):
     """Run a prompt in a loop until complete."""
     if review_cmd and review_mode:
         raise click.UsageError("use --review-cmd or --review, not both")
@@ -660,7 +662,7 @@ def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
     elif prompt:
         user_prompt = prompt
     elif plan_file:
-        user_prompt = f"Read {plan_file} and do the next unchecked step."
+        user_prompt = f"Do the current step of the plan in {plan_file}."
     else:
         user_prompt = _resolve_prompt(None, "Task prompt")
 
@@ -696,6 +698,7 @@ def justloop(ctx, prompt_args, prompt, plan_file, max_step_attempts,
         review=review_mode or "",
         review_every=review_every,
         stop_on_denial=stop_on_denial,
+        review_model=review_model or "",
     )
 
 
@@ -919,6 +922,7 @@ def viewer(ctx, port, no_open):
 @click.option("--cost", is_flag=True, help="Cost breakdown by phase")
 @click.option("--stories", "show_stories", is_flag=True, help="List all stories with status")
 @click.option("--cost-per-story", is_flag=True, help="Cost per story")
+@click.option("--cost-per-model", is_flag=True, help="Cost per model (justloop iterations)")
 @click.option("--errors", is_flag=True, help="Recent errors")
 @click.option("--timeline", is_flag=True, help="Implementation timeline")
 @click.option("--projects", is_flag=True, help="All registered projects")
@@ -927,7 +931,7 @@ def viewer(ctx, port, no_open):
 @click.option("--all-projects", is_flag=True, help="Include all projects in custom SQL")
 @click.option("--format", "fmt", type=click.Choice(["table", "csv", "json"]), default="table", help="Output format")
 @click.pass_context
-def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, timeline, projects, report, watch, all_projects, fmt):
+def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, cost_per_model, errors, timeline, projects, report, watch, all_projects, fmt):
     """Query project data.
 
     Run built-in queries with flags (--progress, --cost, --stories, etc.)
@@ -983,6 +987,7 @@ def query_cmd(ctx, sql, progress, cost, show_stories, cost_per_story, errors, ti
         "cost": cost,
         "stories": show_stories,
         "cost-per-story": cost_per_story,
+        "cost-per-model": cost_per_model,
         "errors": errors,
         "timeline": timeline,
         "projects": projects,

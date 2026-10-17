@@ -42,7 +42,7 @@ JUSTLOOP_COMPLETION_PLAIN = """\
 JUSTLOOP_COMPLETION_PLAN_FILE = """\
 ## Plan file
 
-The plan is in `{{plan_file}}`: rules, an ordered checklist of `- [ ]` steps, and progress notes. Work on the next unchecked step only.
+The plan is in `{{plan_file}}`: rules, an ordered checklist of `- [ ]` steps, and progress notes. The Step Context below shows the plan's rules, the current step and the progress notes relevant to it. Work on that step only, and read the full file only when the step refers to earlier work that is not shown.
 
 pralph manages this file. Do NOT tick checklist boxes and do NOT write progress notes in it: pralph ticks the step when you report it `done` and appends your `note` under "Progress notes".
 
@@ -50,7 +50,7 @@ pralph manages this file. Do NOT tick checklist boxes and do NOT write progress 
 
 """ + _RESULT_FIELDS.replace(
     "{{step_rule}}",
-    "the checklist line you worked on, copied verbatim from the plan file (for example `- [ ] Add the parser`).",
+    "the checklist line you worked on, copied verbatim from the plan file, including any `(model: ...)` tag (for example `- [ ] Add the parser`).",
 )
 
 # Built-in reviewer (--review fresh). Placeholders: {{step}}, {{base}},
